@@ -1,5 +1,5 @@
 """
-🗡️ MODULE 1 — AI VULNERABILITY SCANNER (Active Attacker)
+MODULE 1 — AI VULNERABILITY SCANNER (Active Attacker)
 =========================================================
 Mục đích: Chủ động quét + giả lập tấn công vào web mục tiêu,
 phân tích response để phát hiện lỗ hổng, tạo báo cáo.
@@ -14,6 +14,7 @@ import re
 import json
 import time
 import argparse
+import html
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -23,7 +24,15 @@ import logging
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlencode
-
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from webdriver_manager.chrome import ChromeDriverManager
+    from selenium.webdriver.common.by import By
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
 # ===== LOGGING =====
 logging.basicConfig(
     level=logging.INFO,
@@ -129,39 +138,35 @@ ATTACK_PAYLOADS = {
 # Dấu hiệu tấn công thành công trong response
 VULN_SIGNATURES = {
     "SQLi": [
-        r"admin.*password",        # Rò rỉ dữ liệu
-        r"Administrator",          # Tên role lộ ra
-        r"SELECT.*FROM",           # Query lộ ra trong response
-        r"syntax error",           # SQL error
-        r"mysql_fetch",            # PHP SQL error
-        r"ORA-\d{5}",             # Oracle error
-        r"unclosed quotation",     # SQL error
-        r"\(\d+,\s*'[^']+',\s*'[^']+'",  # Tuple data rò rỉ
+        r"\(\d+,\s*'[^']+',\s*'[^']+'",  # (1, 'admin', 'pass')
+        r"root:x:0:0",                   # /etc/passwd qua SQLi
+        r"syntax error.*SQL",            # SQL error rõ ràng
+        r"mysql_fetch_array\(\)",        # PHP MySQL error
+        r"ORA-\d{5}:",                   # Oracle error với mã lỗi
+        r"Microsoft OLE DB.*error",      # MSSQL error
+        r"pg_query\(\).*failed",         # PostgreSQL error
+        r"SQLite3::query\(\)",           # SQLite error
     ],
     "XSS": [
-        r"<script>alert",          # Script được render
-        r"onerror=alert",          # Event handler được render
-        r"<svg onload",            # SVG được render
-        r"javascript:alert",       # JS URI được render
-        r"<body onload",           # Body event
+        r"<script[^>]*>alert\(",
+        r"<img[^>]+onerror\s*=\s*alert",
+        r"<svg[^>]+onload\s*=\s*alert",
     ],
     "Command Injection": [
-        r"root:.*:0:0",            # /etc/passwd output
-        r"uid=\d+",                # id command output
-        r"whoami.*\n\w+",          # whoami output
-        r"total \d+",             # ls -la output
-        r"drwx",                   # ls output
+        r"uid=\d+\(\w+\)\s+gid=\d+",
+        r"root:x:0:0:root:/root:",
+        r"(?m)^total \d+$\ndrwx",
+        r"Windows IP Configuration",
     ],
     "Path Traversal": [
-        r"root:.*:0:0",            # /etc/passwd
-        r"\[extensions\]",         # win.ini
-        r"shadow",                 # /etc/shadow
-        r"\.\./\.\./",            # Path reflected back
+        r"root:x:0:0:root:/root:/bin/",
+        r"\[extensions\]\s*\n.*MAPI=",
+        r"daemon:x:\d+:\d+:daemon",
     ],
     "SSRF": [
-        r"ami-id",                 # AWS metadata
-        r"instance-id",            # AWS metadata
-        r"Connection refused",     # Port scan response
+        r"ami-id\s*:\s*ami-[a-f0-9]+",
+        r"instance-id\s*:\s*i-[a-f0-9]+",
+        r"local-ipv4\s*:\s*\d+\.\d+\.\d+",
     ],
 }
 
@@ -210,7 +215,7 @@ class AIEngine:
 # ===== SCANNER CHÍNH =====
 class VulnerabilityScanner:
     """
-    🗡️ Module 1 — Active Vulnerability Scanner
+    Module 1 — Active Vulnerability Scanner
     Chủ động tấn công thử vào web mục tiêu, phân tích response.
     """
 
@@ -232,7 +237,7 @@ class VulnerabilityScanner:
         print(f"""
 {Color.CYAN}{Color.BOLD}
 ╔══════════════════════════════════════════════════════╗
-║  🗡️  AI VULNERABILITY SCANNER — MODULE 1            ║
+║   AI VULNERABILITY SCANNER — MODULE 1            ║
 ║  Active Attack Simulation & Vulnerability Detection  ║
 ╠══════════════════════════════════════════════════════╣
 ║  Target : {self.target_url:<41s}║
@@ -287,6 +292,12 @@ class VulnerabilityScanner:
                             'method': 'GET',
                             'source': 'link'
                         })
+        if not self.endpoints:
+            print(f"  {Color.YELLOW}⚠️  Không tìm thấy form tĩnh → thử quét JS động...{Color.END}")
+            dynamic = self.extract_dynamic_endpoints(self.target_url)
+            self.endpoints.extend(dynamic)
+            bundle_endpoints = self.scan_js_bundles(self.target_url)
+            self.endpoints.extend(bundle_endpoints)
 
         # Loại bỏ trùng lặp
         seen = set()
@@ -304,6 +315,223 @@ class VulnerabilityScanner:
 
         return len(self.endpoints) > 0
 
+    def extract_dynamic_endpoints(self, url):
+        """Dùng Selenium để bắt network requests và quét endpoint động của SPA."""
+        if not SELENIUM_AVAILABLE:
+            print(f"  {Color.YELLOW}⚠️  Selenium chưa cài.{Color.END}")
+            return []
+
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
+
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+
+        endpoints = []
+        try:
+            print(f"  {Color.CYAN}🌐 Đang render + bắt API calls: {url}{Color.END}")
+            driver.get(url)
+            time.sleep(4)
+
+            # DEBUG: dump HTML ra file để kiểm tra
+            with open("debug_selenium.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            print("  🔍 DEBUG: Đã lưu HTML render vào debug_selenium.html")
+            print(f"  🔍 DEBUG: Title trang = '{driver.title}'")
+            print(
+                f"  🔍 DEBUG: Số thẻ <input> tìm thấy = "
+                f"{len(driver.find_elements(By.TAG_NAME, 'input'))}"
+            )
+            print(
+                f"  🔍 DEBUG: Số thẻ <form> tìm thấy = "
+                f"{len(driver.find_elements(By.TAG_NAME, 'form'))}"
+            )
+
+            driver.execute_script("""
+                window._capturedRequests = [];
+                const origFetch = window.fetch;
+                window.fetch = function(...args) {
+                    window._capturedRequests.push({url: args[0], method: (args[1]?.method || 'GET')});
+                    return origFetch.apply(this, args);
+                };
+                const origOpen = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, reqUrl) {
+                    window._capturedRequests.push({url: reqUrl, method: method});
+                    return origOpen.apply(this, arguments);
+                };
+            """)
+
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
+
+            try:
+                logs = driver.get_log('performance')
+                for entry in logs:
+                    log = json.loads(entry['message'])['message']
+                    if log.get('method') != 'Network.requestWillBeSent':
+                        continue
+
+                    req = log['params']['request']
+                    req_url = req['url']
+                    method = req['method']
+
+                    if any(
+                        req_url.endswith(ext)
+                        for ext in ['.js', '.css', '.png', '.jpg', '.ico', '.woff', '.map']
+                    ):
+                        continue
+
+                    if 'localhost' in req_url or urlparse(url).netloc in req_url:
+                        parsed = urlparse(req_url)
+                        if parsed.query:
+                            for part in parsed.query.split('&'):
+                                if '=' in part:
+                                    param = part.split('=')[0]
+                                    base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                                    endpoints.append({
+                                        'url': base,
+                                        'param': param,
+                                        'method': method,
+                                        'source': 'network-query'
+                                    })
+                        else:
+                            endpoints.append({
+                                'url': req_url,
+                                'param': 'id',
+                                'method': method,
+                                'source': 'network-api'
+                            })
+            except Exception as e:
+                print(f"  {Color.YELLOW}⚠️  Performance log lỗi: {e}{Color.END}")
+
+            try:
+                captured_requests = driver.execute_script("return window._capturedRequests || [];")
+                for req in captured_requests:
+                    req_url = req.get('url')
+                    method = (req.get('method') or 'GET').upper()
+                    if not req_url:
+                        continue
+                    req_url = urljoin(url, req_url)
+                    parsed = urlparse(req_url)
+                    if parsed.query:
+                        for part in parsed.query.split('&'):
+                            if '=' in part:
+                                param = part.split('=')[0]
+                                base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                                endpoints.append({
+                                    'url': base,
+                                    'param': param,
+                                    'method': method,
+                                    'source': 'captured-xhr'
+                                })
+                    else:
+                        endpoints.append({
+                            'url': req_url,
+                            'param': 'id',
+                            'method': method,
+                            'source': 'captured-xhr'
+                        })
+            except Exception as e:
+                print(f"  {Color.YELLOW}⚠️  Captured request log lỗi: {e}{Color.END}")
+
+            try:
+                api_paths = driver.execute_script("""
+                    const scripts = Array.from(document.querySelectorAll('script[src]'));
+                    return scripts.map(s => s.src).filter(
+                        s => s.includes('localhost') || s.includes('assets')
+                    );
+                """)
+                for script_url in api_paths[:5]:
+                    try:
+                        resp = self.session.get(script_url, timeout=5)
+                        patterns = re.findall(r'["\\`](/api/[a-zA-Z0-9/_\\-]+)["\\`]', resp.text)
+                        patterns += re.findall(r'["\\`](/v\\d+/[a-zA-Z0-9/_\\-]+)["\\`]', resp.text)
+                        for path in set(patterns):
+                            full_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}{path}"
+                            endpoints.append({
+                                'url': full_url,
+                                'param': 'id',
+                                'method': 'GET',
+                                'source': 'js-bundle-inline'
+                            })
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"  {Color.YELLOW}⚠️  JS scan lỗi: {e}{Color.END}")
+
+            all_inputs = driver.find_elements(By.TAG_NAME, "input")
+            existing_params = {ep['param'] for ep in endpoints}
+            for inp in all_inputs:
+                name = (
+                    inp.get_attribute("name")
+                    or inp.get_attribute("id")
+                    or inp.get_attribute("placeholder")
+                    or inp.get_attribute("v-model")
+                )
+                if name and name not in existing_params:
+                    endpoints.append({
+                        'url': url,
+                        'param': name,
+                        'method': 'GET',
+                        'source': 'dom-input'
+                    })
+                    existing_params.add(name)
+
+            seen = set()
+            unique = []
+            for ep in endpoints:
+                key = f"{ep['url']}|{ep['param']}|{ep['method']}"
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(ep)
+            endpoints = unique
+
+        except Exception as e:
+            print(f"  {Color.RED}❌ Lỗi: {e}{Color.END}")
+        finally:
+            driver.quit()
+
+        print(f"  ✅ Tìm thêm {Color.BOLD}{len(endpoints)}{Color.END} endpoints động")
+        return endpoints
+
+    def scan_js_bundles(self, base_url):
+        """Tìm API endpoints ẩn trong JS bundle files."""
+        print(f"  {Color.CYAN}📦 Quét JS bundles...{Color.END}")
+        found = []
+        try:
+            resp = self.session.get(base_url, timeout=10)
+            js_files = re.findall(r'src=["\']([^"\']*\.js[^"\']*)["\']', resp.text)
+            for js_path in js_files[:10]:
+                js_url = urljoin(base_url, js_path)
+                try:
+                    js_resp = self.session.get(js_url, timeout=5)
+                    paths = re.findall(
+                        r'["\\`](/(?:api|v\\d+)/[a-zA-Z0-9/_\\-]{3,})["\\`]',
+                        js_resp.text
+                    )
+                    for path in set(paths):
+                        full = (
+                            f"{urlparse(base_url).scheme}://"
+                            f"{urlparse(base_url).netloc}{path}"
+                        )
+                        found.append({
+                            'url': full,
+                            'param': 'id',
+                            'method': 'GET',
+                            'source': 'js-bundle'
+                        })
+                        print(f"     • Phát hiện API: {Color.YELLOW}{path}{Color.END}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return found
+
     # ----- Phase 2: Tấn công giả lập -----
     def attack_endpoint(self, endpoint, attack_type, payload):
         """Gửi 1 payload tấn công vào 1 endpoint, phân tích kết quả"""
@@ -316,27 +544,20 @@ class VulnerabilityScanner:
             else:
                 resp = self.session.post(url, data={param: payload}, timeout=5)
 
-            # Kiểm tra response có dấu hiệu lỗ hổng không
             is_vulnerable = False
             evidence = []
 
-            # Check regex signatures
             if attack_type in VULN_SIGNATURES:
                 for pattern in VULN_SIGNATURES[attack_type]:
-                    match = re.search(pattern, resp.text, re.IGNORECASE)
+                    match = re.search(pattern, resp.text, re.IGNORECASE | re.MULTILINE)
                     if match:
                         is_vulnerable = True
                         evidence.append(f"Pattern match: {match.group()[:60]}")
 
-            # Check payload reflected in response (XSS check)
-            if attack_type == "XSS" and payload in resp.text:
-                is_vulnerable = True
-                evidence.append("Payload reflected in response (unescaped)")
-
-            # Check if path traversal content reflected
-            if attack_type == "Path Traversal" and "../" in payload and "../" in resp.text:
-                is_vulnerable = True
-                evidence.append("Path traversal pattern reflected")
+            if attack_type == "XSS":
+                if payload in resp.text and html.escape(payload) != payload:
+                    is_vulnerable = True
+                    evidence.append("Payload reflected unencoded")
 
             # AI classification
             ai_label, ai_conf = self.ai.classify(payload)
@@ -370,7 +591,7 @@ class VulnerabilityScanner:
 
     def run_attacks(self):
         """Phase 2: Gửi tất cả payload vào tất cả endpoint"""
-        print(f"\n{Color.RED}[Phase 2] 🗡️ Bắt đầu giả lập tấn công...{Color.END}")
+        print(f"\n{Color.RED}[Phase 2]  Bắt đầu giả lập tấn công...{Color.END}")
         total_tests = 0
 
         for ep in self.endpoints:
@@ -526,7 +747,7 @@ class VulnerabilityScanner:
             "CSRF": "🟡 MEDIUM",
         }
 
-        md = f"""# 🗡️ BÁO CÁO QUÉT LỖ HỔNG — MODULE 1
+        md = f"""#  BÁO CÁO QUÉT LỖ HỔNG — MODULE 1
 
 **Ngày quét:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
 **Target:** `{self.target_url}`
@@ -644,134 +865,98 @@ def create_api_server():
         if not target_url.startswith('http'):
             target_url = 'http://' + target_url
 
-        logger.info(f"🗡️ API Scan requested: {target_url}")
+        logger.info(f" API Scan requested: {target_url}")
 
-        scanner = VulnerabilityScanner(target_url)
-        scanner.ai = shared_ai  # Dùng chung AI engine đã load
-        scanner.start_time = time.time()
-
-        # Phase 1: Crawl
         try:
-            resp = scanner.session.get(target_url, timeout=10)
-            if resp.status_code != 200:
-                return jsonify({'error': f'Target trả về HTTP {resp.status_code}'}), 400
-        except Exception as e:
-            return jsonify({'error': f'Không kết nối được: {str(e)}'}), 400
+            scanner = VulnerabilityScanner(target_url)
+            scanner.ai = shared_ai  # Dùng chung AI engine đã load
+            scanner.start_time = time.time()
 
-        parser = FormParser()
-        parser.feed(resp.text)
+            # Phase 1: Crawl
+            if not scanner.crawl_target():
+                return jsonify({
+                    'error': 'Không tìm thấy endpoint nào trên trang',
+                    'target': target_url
+                }), 404
 
-        for form in parser.forms:
-            action = urljoin(target_url, form['action'])
-            for inp in form['inputs']:
-                if inp['name'] and inp['type'] not in ['submit', 'button', 'hidden']:
-                    scanner.endpoints.append({
-                        'url': action,
-                        'param': inp['name'],
-                        'method': form['method'],
-                        'source': 'form'
-                    })
+            # Phase 2: Attack
+            for ep in scanner.endpoints:
+                for attack_type, payloads in ATTACK_PAYLOADS.items():
+                    for payload in payloads:
+                        scanner.attack_endpoint(ep, attack_type, payload)
 
-        for link in parser.links:
-            full_url = urljoin(target_url, link)
-            parsed = urlparse(full_url)
-            if parsed.query:
-                for part in parsed.query.split('&'):
-                    if '=' in part:
-                        param = part.split('=')[0]
-                        base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                        scanner.endpoints.append({
-                            'url': base_url,
-                            'param': param,
-                            'method': 'GET',
-                            'source': 'link'
-                        })
+            scanner.end_time = time.time()
+            duration = scanner.end_time - scanner.start_time
 
-        # Deduplicate
-        seen = set()
-        unique = []
-        for ep in scanner.endpoints:
-            key = f"{ep['url']}|{ep['param']}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(ep)
-        scanner.endpoints = unique
-
-        if not scanner.endpoints:
-            return jsonify({
-                'error': 'Không tìm thấy endpoint nào trên trang',
-                'target': target_url
-            }), 404
-
-        # Phase 2: Attack
-        for ep in scanner.endpoints:
-            for attack_type, payloads in ATTACK_PAYLOADS.items():
-                for payload in payloads:
-                    scanner.attack_endpoint(ep, attack_type, payload)
-
-        scanner.end_time = time.time()
-        duration = scanner.end_time - scanner.start_time
-
-        # Phase 3: Build response
-        severity_map = {
-            "SQLi": "CRITICAL",
-            "Command Injection": "CRITICAL",
-            "XSS": "HIGH",
-            "Path Traversal": "HIGH",
-            "SSRF": "HIGH",
-            "CSRF": "MEDIUM",
-        }
-
-        vuln_by_type = {}
-        for v in scanner.vulnerabilities:
-            t = v['attack_type']
-            if t not in vuln_by_type:
-                vuln_by_type[t] = []
-            vuln_by_type[t].append(v)
-
-        total_ep = len(scanner.endpoints)
-        vuln_ep = len(set(f"{v['endpoint']}|{v['param']}" for v in scanner.vulnerabilities))
-        score = int(((total_ep - vuln_ep) / total_ep * 100)) if total_ep > 0 else 100
-
-        # Lưu báo cáo lỗi cho Feedback Loop (AI Agent fix)
-        report_path = None
-        if scanner.vulnerabilities:
-            report_path = scanner.save_report()
-
-        result = {
-            'target': target_url,
-            'duration': round(duration, 1),
-            'total_endpoints': total_ep,
-            'total_payloads': len(scanner.scan_results),
-            'total_vulnerabilities': len(scanner.vulnerabilities),
-            'score': score,
-            'endpoints': scanner.endpoints,
-            'vulnerabilities_by_type': {},
-            'report_files': report_path,
-        }
-
-        for attack_type, vulns in vuln_by_type.items():
-            affected = list(set(
-                f"{v['method']} {urlparse(v['endpoint']).path}?{v['param']}"
-                for v in vulns
-            ))
-            result['vulnerabilities_by_type'][attack_type] = {
-                'severity': severity_map.get(attack_type, 'MEDIUM'),
-                'count': len(vulns),
-                'affected_endpoints': affected,
-                'samples': [
-                    {
-                        'payload': v['payload'],
-                        'evidence': v['evidence'][:2] if v['evidence'] else [],
-                        'ai_label': v['ai_classification'],
-                        'ai_confidence': round(v['ai_confidence'], 1),
-                    }
-                    for v in vulns[:5]
-                ]
+            # Phase 3: Build response
+            severity_map = {
+                "SQLi": "CRITICAL",
+                "Command Injection": "CRITICAL",
+                "XSS": "HIGH",
+                "Path Traversal": "HIGH",
+                "SSRF": "HIGH",
+                "CSRF": "MEDIUM",
             }
 
-        logger.info(f"✅ Scan hoàn tất: {len(scanner.vulnerabilities)} lỗ hổng, {duration:.1f}s")
-        return jsonify(result)
+            vuln_by_type = {}
+            for v in scanner.vulnerabilities:
+                t = v['attack_type']
+                if t not in vuln_by_type:
+                    vuln_by_type[t] = []
+                vuln_by_type[t].append(v)
+
+            total_ep = len(scanner.endpoints)
+            vuln_ep = len(set(f"{v['endpoint']}|{v['param']}" for v in scanner.vulnerabilities))
+            score = int(((total_ep - vuln_ep) / total_ep * 100)) if total_ep > 0 else 100
+
+            # Lưu báo cáo lỗi cho Feedback Loop (AI Agent fix)
+            report_path = None
+            if scanner.vulnerabilities:
+                report_path = scanner.save_report()
+
+            result = {
+                'target': target_url,
+                'duration': round(duration, 1),
+                'total_endpoints': total_ep,
+                'total_payloads': len(scanner.scan_results),
+                'total_vulnerabilities': len(scanner.vulnerabilities),
+                'score': score,
+                'endpoints': scanner.endpoints,
+                'vulnerabilities_by_type': {},
+                'report_files': report_path,
+            }
+
+            for attack_type, vulns in vuln_by_type.items():
+                affected = list(set(
+                    f"{v['method']} {urlparse(v['endpoint']).path}?{v['param']}"
+                    for v in vulns
+                ))
+                result['vulnerabilities_by_type'][attack_type] = {
+                    'severity': severity_map.get(attack_type, 'MEDIUM'),
+                    'count': len(vulns),
+                    'affected_endpoints': affected,
+                    'samples': [
+                        {
+                            'payload': v['payload'],
+                            'evidence': v['evidence'][:2] if v['evidence'] else [],
+                            'ai_label': v['ai_classification'],
+                            'ai_confidence': round(v['ai_confidence'], 1),
+                        }
+                        for v in vulns[:5]
+                    ]
+                }
+
+            logger.info(f"✅ Scan hoàn tất: {len(scanner.vulnerabilities)} lỗ hổng, {duration:.1f}s")
+            return jsonify(result)
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"❌ Exception in /api/scan: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({
+                'error': f'Internal server error: {str(e)}',
+                'details': traceback.format_exc()
+            }), 500
 
     return api
 
@@ -779,7 +964,7 @@ def create_api_server():
 # ===== MAIN =====
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='🗡️ AI Vulnerability Scanner — Module 1'
+        description=' AI Vulnerability Scanner — Module 1'
     )
     parser.add_argument(
         '--target', '-t',
@@ -802,32 +987,50 @@ if __name__ == '__main__':
         default=5001,
         help='Port cho Web Server (mặc định: 5001)'
     )
+    # Thêm flag chạy liên tục
+    parser.add_argument(
+        '--loop', '-l',
+        action='store_true',
+        help='Chế độ giám sát liên tục (quét lặp lại sau mỗi khoảng nghỉ)'
+    )
     args = parser.parse_args()
 
     if args.server:
-        # Chế độ Web Server
+        # CHẾ ĐỘ WEB SERVER: Bản thân nó đã chạy liên tục chờ request từ UI
         app = create_api_server()
-        logger.info(f"🌐 Module 1 Web UI: http://127.0.0.1:{args.port}")
+        logger.info(f" Module 1 Web UI đang chạy tại: http://127.0.0.1:{args.port}")
         app.run(debug=False, port=args.port, threaded=True)
     else:
-        # Chế độ CLI
+        # CHẾ ĐỘ CLI (Dòng lệnh)
         target = args.target
         while not target:
-            print(f"{Color.CYAN}👉 Vui lòng nhập URL mục tiêu (ví dụ: http://localhost:5170): {Color.END}", end="")
+            print(f"{Color.CYAN} Vui lòng nhập URL mục tiêu: {Color.END}", end="")
             target = input().strip()
             if target and not target.startswith('http'):
                 target = 'http://' + target
 
-        scanner = VulnerabilityScanner(target)
-        while True:
-            if scanner.run(save_report=args.report):
-                break
-            else:
-                print(f"\n{Color.YELLOW}❓ Bạn có muốn thử lại với URL khác không? (y/n): {Color.END}", end="")
+        if args.loop:
+            # KỊCH BẢN CHẠY LIÊN TỤC (Dành cho sau này tích hợp làm WAF)
+            print(f"{Color.GREEN} BẮT ĐẦU CHẾ ĐỘ GIÁM SÁT LIÊN TỤC TRÊN: {target}{Color.END}")
+            print(f"{Color.YELLOW}Nhấn Ctrl+C để dừng hệ thống.{Color.END}\n")
+            try:
+                scanner = VulnerabilityScanner(target)
+                while True:
+                    scanner.run(save_report=args.report)
+                    print(f"\n{Color.BLUE} Hoàn tất chu kỳ quét. Nghỉ 60 giây trước khi quét lại...{Color.END}")
+                    time.sleep(60) # Nghỉ 60s để tránh làm nghẽn mạng target
+            except KeyboardInterrupt:
+                print(f"\n{Color.RED} Đã dừng giám sát.{Color.END}")
+        else:
+            # KỊCH BẢN QUÉT 1 LẦN RỒI HỎI (Như cũ nhưng gọn hơn)
+            scanner = VulnerabilityScanner(target)
+            while True:
+                scanner.run(save_report=args.report)
+                print(f"\n{Color.YELLOW} Bạn có muốn quét lại hoặc thử URL khác không? (y/n): {Color.END}", end="")
                 choice = input().lower().strip()
                 if choice != 'y':
                     break
-                print(f"{Color.CYAN}👉 Nhập URL mới: {Color.END}", end="")
+                print(f"{Color.CYAN}👉 Nhập URL mới (để trống để dùng lại URL cũ): {Color.END}", end="")
                 new_target = input().strip()
                 if new_target:
                     if not new_target.startswith('http'):
