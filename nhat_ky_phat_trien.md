@@ -499,4 +499,45 @@ git add -A && git commit -m "📓 Cập nhật nhật ký phát triển" && git 
 
 ---
 
-*Kết thúc phiên: 14:38 — Tổng thời gian: ~2 phút*
+
+---
+---
+
+## 04/04/2026 — Phiên làm việc: Hoàn thiện Module 2 (AI WAF Shield)
+
+### 🕐 14:10 — Tóm tắt kiến trúc Module 2 (`modul2_waf.py`)
+
+**Mục tiêu:** Xây dựng hệ thống bảo vệ 24/7, đóng vai trò là một **Reverse Proxy** thông minh đứng trước Web Server thật để lọc mọi traffic xấu.
+
+#### 🧠 Các thành phần cốt lõi:
+
+| Thành phần | Chức năng chính | Vai trò |
+|-----------|-----------------|---------|
+| **`PayloadCache`** | Lưu kết quả scan vào RAM (LRU + TTL) | Tăng tốc xử lý, giảm tải cho CPU/Model AI khi gặp payload trùng lặp. |
+| **`RateLimiter`** | Giới hạn 100 req/phút (Normal) hoặc 10 req/phút (Flagged) | Chống Brute-force, DoS và hạn chế attacker dò quét. |
+| **`IPBlacklist`** | Tự động cấm IP 10 phút nếu bị chặn 5 lần trong 60s | Cách ly triệt để các nguồn tấn công dồn dập tự động. |
+| **`AlertSystem`** | Terminal color alert + Discord/Telegram Webhook | Thông báo ngay lập tức cho admin khi hệ thống bị tấn công quy mô lớn. |
+| **`AIEngine`** | Load model Bi-LSTM (Accuracy 93.42%) | Trái tim của hệ thống, phân loại: SQLi, XSS, CmdInj, PathTrav, SSRF... |
+
+#### 🔄 Luồng xử lý request (Flow):
+
+1. **Request In** ➔ Mọi yêu cầu HTTP đi vào WAF (Port 5000).
+2. **`security_filter()`** ➔ Middleware thực hiện 4 bước kiểm tra:
+   - **Step 1: Blacklist** ➔ Nếu IP nằm trong danh sách cấm ➔ **Block (403)**.
+   - **Step 2: Rate Limit** ➔ Nếu vượt ngưỡng yêu cầu/giây ➔ **Block (429)**.
+   - **Step 3: Extract Data** ➔ Gom tất cả: Query params, JSON body, Form data.
+   - **Step 4: AI Scan** ➔ Gọi `scan_payload()` cho từng item.
+     - Kiểm tra `Cache` trước ➔ Nếu miss ➔ Đưa vào `Bi-LSTM Model`.
+     - Nếu phát hiện tấn công (Conf > 75%) ➔ Ghi nhận vi phạm vào Blacklist/RateLimit ➔ Gửi Alert ➔ **Block (403)**.
+3. **`proxy()`** ➔ Nếu an toàn, WAF chuyển tiếp request tới Backend thật (`localhost:5173`).
+   - Có cơ chế **Retry (3 lần)** nếu backend phản hồi chậm hoặc timeout.
+4. **Response Out** ➔ Trả kết quả từ Backend về cho người dùng.
+
+#### 📊 Thống kê & Giám sát:
+- Endpoint `/ai-waf/health`: Kiểm tra sức khoẻ hệ thống và kết nối Backend.
+- Endpoint `/ai-waf/stats`: Dashboard tổng hợp (tỉ lệ cache hit, số IP bị ban, loại tấn công phổ biến).
+
+---
+
+*Kết thúc phiên: 14:15 — Tổng thời gian: ~10 phút*
+
