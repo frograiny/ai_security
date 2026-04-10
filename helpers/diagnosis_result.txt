@@ -1,0 +1,80 @@
+Labels: ['CSRF', 'Command Injection', 'Normal', 'Path Traversal', 'SQLi', 'SSRF', 'XSS']
+MAX_LEN = 150
+
+==========================================================================================
+Payload: admin' OR 1
+  Expected: SQLi | Got: SQLi (91.8%) [OK]
+  Length: 11 chars | Tokens: 11/150 (7% used)
+  All probs: SQLi=91.8% | Normal=8.1% | Command Injection=0.1%
+------------------------------------------------------------------------------------------
+Payload: ' OR 1=1--
+  Expected: SQLi | Got: SQLi (100.0%) [OK]
+  Length: 10 chars | Tokens: 10/150 (7% used)
+  All probs: SQLi=100.0%
+------------------------------------------------------------------------------------------
+Payload: ' OR '1'='1
+  Expected: SQLi | Got: SQLi (100.0%) [OK]
+  Length: 11 chars | Tokens: 11/150 (7% used)
+  All probs: SQLi=100.0%
+------------------------------------------------------------------------------------------
+Payload: admin' OR '1'='1'--
+  Expected: SQLi | Got: SQLi (100.0%) [OK]
+  Length: 19 chars | Tokens: 19/150 (13% used)
+  All probs: SQLi=100.0%
+------------------------------------------------------------------------------------------
+Payload: 1' UNION SELECT null,null--
+  Expected: SQLi | Got: SQLi (100.0%) [OK]
+  Length: 27 chars | Tokens: 27/150 (18% used)
+  All probs: SQLi=100.0%
+------------------------------------------------------------------------------------------
+Payload: <img src=x onerror=alert(1)>
+  Expected: XSS | Got: XSS (100.0%) [OK]
+  Length: 28 chars | Tokens: 28/150 (19% used)
+  All probs: XSS=100.0%
+------------------------------------------------------------------------------------------
+Payload: https://www.google.com/search?q=cat
+  Expected: Normal | Got: Normal (82.1%) [OK]
+  Length: 35 chars | Tokens: 35/150 (23% used)
+  All probs: Normal=82.1% | XSS=17.9%
+------------------------------------------------------------------------------------------
+Payload: http://localhost:8080/api/users
+  Expected: Normal | Got: Normal (94.5%) [OK]
+  Length: 31 chars | Tokens: 31/150 (21% used)
+  All probs: Normal=94.5% | XSS=5.5%
+------------------------------------------------------------------------------------------
+Payload: Xin chao toi muon tim tai lieu
+  Expected: Normal | Got: Normal (99.9%) [OK]
+  Length: 30 chars | Tokens: 30/150 (20% used)
+  All probs: Normal=99.9% | SQLi=0.1%
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+TOKEN ANALYSIS: admin' OR 1
+==========================================================================================
+Char-by-char tokens:
+  'a' -> token 3
+  'd' -> token 17
+  'm' -> token 20
+  'i' -> token 12
+  'n' -> token 8
+  ''' -> token 23
+  ' ' -> token 2
+  'O' -> token 10
+  'R' -> token 7
+  ' ' -> token 2
+  '1' -> token 13
+
+==========================================================================================
+SHORT vs LONG SQLi COMPARISON
+==========================================================================================
+
+SHORT (<15 chars):
+  [OK]       SQLi  91.8% | admin' OR 1
+  [OK]       SQLi 100.0% | ' OR 1=1--
+  [OK]       SQLi 100.0% | ' OR '1'='1
+  [OK]       SQLi  99.5% | admin'--
+
+LONG (>30 chars):
+  [OK]       SQLi 100.0% | 1' UNION SELECT username,password FROM users--
+  [OK]       SQLi 100.0% | 1'; DROP TABLE users--
+  [OK]       SQLi 100.0% | ' UNION SELECT null,table_name FROM information_schema.tables--

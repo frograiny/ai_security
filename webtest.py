@@ -73,6 +73,27 @@ HTML_TEMPLATE = """
             </form>
             <p class="text-xs text-gray-500 mt-2">Payload test: <code class="bg-gray-200">127.0.0.1 ; whoami</code></p>
         </div>
+
+        <!-- 5. SSRF Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-purple-700">5. Tải trang web (SSRF)</h2>
+            <form action="/fetch-url" method="GET">
+                <input name="url" type="text" placeholder="Nhập URL (vd: http://example.com)" class="border p-2 w-full rounded mb-2">
+                <button type="submit" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">Fetch</button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">Payload test: <code class="bg-gray-200">http://169.254.169.254/latest/meta-data/</code></p>
+        </div>
+
+        <!-- 6. CSRF Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-orange-700">6. Chuyển khoản (CSRF)</h2>
+            <form action="/transfer" method="POST">
+                <input name="to" type="text" placeholder="Số tài khoản" class="border p-2 w-full rounded mb-2">
+                <input name="amount" type="text" placeholder="Số tiền" class="border p-2 w-full rounded mb-2">
+                <button type="submit" class="bg-orange-600 text-white px-4 py-2 rounded hover:bg-orange-700">Chuyển</button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">Lỗ hổng: Không có CSRF token → GET <code class="bg-gray-200">/transfer?to=hacker&amount=999</code></p>
+        </div>
     </div>
     
     <div class="container mx-auto px-8">
@@ -144,6 +165,36 @@ def ping():
     except:
         return "Lỗi thực thi lệnh"
 
+@app.route('/fetch-url')
+def fetch_url():
+    url = request.args.get('url', '')
+    # LỖI SSRF: Cho phép người dùng chỉ định URL bất kỳ và server sẽ fetch
+    if not url:
+        return "<h3>Nhập URL cần tải:</h3><p>Ví dụ: /fetch-url?url=http://example.com</p>"
+    try:
+        import requests as ssrf_req
+        resp = ssrf_req.get(url, timeout=5)
+        return f"<h3>Kết quả fetch URL:</h3><p>URL: {url}</p><p>Status: {resp.status_code}</p><pre>{resp.text[:500]}</pre>"
+    except Exception as e:
+        return f"<h3>Lỗi khi fetch:</h3><p>{str(e)}</p>"
+
+@app.route('/transfer', methods=['GET', 'POST'])
+def transfer():
+    # LỖI CSRF: Không có CSRF token, cho phép thực hiện hành động nhạy cảm bằng GET
+    if request.method == 'POST' or request.args.get('to'):
+        to_account = request.args.get('to', '') or request.form.get('to', '')
+        amount = request.args.get('amount', '0') or request.form.get('amount', '0')
+        return f"<h3>✅ Chuyển khoản thành công (MÔ PHỎNG)</h3><p>Tới: {to_account} | Số tiền: {amount} VND</p><p class='text-red-500'>⚠️ Endpoint này không có CSRF token → dễ bị tấn công CSRF</p>"
+    return """
+    <h3>Chuyển khoản (CSRF Vulnerable)</h3>
+    <form method="POST">
+        <input name="to" placeholder="Số tài khoản" class="border p-2 rounded mb-2"><br>
+        <input name="amount" placeholder="Số tiền" class="border p-2 rounded mb-2"><br>
+        <button type="submit" class="bg-purple-600 text-white px-4 py-2 rounded">Chuyển</button>
+    </form>
+    """
+
 if __name__ == '__main__':
     print("🔥 Web mục tiêu (Vulnerable) đang chạy tại http://localhost:5170")
+    print("   Endpoints: /search-user, /feedback, /view-doc, /ping, /fetch-url, /transfer")
     app.run(port=5170)

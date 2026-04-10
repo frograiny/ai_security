@@ -1,10 +1,13 @@
 """
-MODULE 2 — AI WAF SHIELD (Enhanced)
-=====================================
-Thêm mới so với v1:
+MODULE 2 — AI WAF SHIELD (Enhanced v3)
+========================================
+Tính năng:
+  - Rule-Based Regex Layer (chặn nhanh trước AI)
+  - AI Bi-LSTM Deep Scan (phân loại 7 loại tấn công)
   - Rate Limiting: 100 req/phút/IP, 10 req/phút sau khi bị block
   - IP Blacklist tự động: 5 lần BLOCKED trong 60s → blacklist 10 phút
   - Alert System: terminal alert + webhook (Discord/Telegram tuỳ chọn)
+  - CLI: python modul2_waf.py --target <URL> --port <PORT>
 """
 
 from flask import Flask, request, jsonify, Response
@@ -14,20 +17,54 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 import pickle
 import os
+import re
+import argparse
 import requests as req_lib
 import logging
 import hashlib
+import urllib.parse
 from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta
 import time
 import threading
+from typing import Any
+
+
+def flatten_payloads(value: Any) -> list[str]:
+    """Flatten nested request structures so API payloads are scanned recursively."""
+    flattened = []
+
+    def walk(node: Any):
+        if node is None:
+            return
+        if isinstance(node, dict):
+            for key, item in node.items():
+                walk(key)
+                walk(item)
+            return
+        if isinstance(node, (list, tuple, set)):
+            for item in node:
+                walk(item)
+            return
+        if isinstance(node, bytes):
+            try:
+                node = node.decode("utf-8", errors="ignore")
+            except Exception:
+                node = str(node)
+        text = str(node).strip()
+        if text:
+            flattened.append(text)
+
+    walk(value)
+    return flattened
 
 # ===== LOGGING =====
+_LOG_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [AI-WAF-SHIELD] - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("shield_protection.log", encoding='utf-8'),
+        logging.FileHandler(os.path.join(_LOG_DIR, "shield_protection.log"), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -35,7 +72,7 @@ logger = logging.getLogger(__name__)
 
 # Alert logger riêng — chỉ ghi các sự kiện nghiêm trọng
 alert_logger = logging.getLogger("ALERT")
-alert_handler = logging.FileHandler("shield_alerts.log", encoding='utf-8')
+alert_handler = logging.FileHandler(os.path.join(_LOG_DIR, "shield_alerts.log"), encoding='utf-8')
 alert_handler.setFormatter(logging.Formatter('%(asctime)s - [ALERT] - %(message)s'))
 alert_logger.addHandler(alert_handler)
 alert_logger.setLevel(logging.WARNING)
@@ -46,12 +83,45 @@ CORS(app)
 # ===== CONFIGURATION =====
 MODEL_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
 MAX_LEN          = 150
-REAL_WEB_URL     = "http://localhost:5170"
+REAL_WEB_URL     = "http://localhost:5170"  # Mặc định — ghi đè bằng --target khi chạy CLI
+WAF_PORT         = 5000                     # Mặc định — ghi đè bằng --port khi chạy CLI
 THRESHOLD        = 75.0
 CACHE_TTL        = 300
 MAX_CACHE_SIZE   = 1000
 REQUEST_TIMEOUT  = 10
 MAX_RETRIES      = 3
+WAF_SHARED_SECRET = os.getenv("AI_WAF_SHARED_SECRET", "")
+
+# ══════════════════════════════════════════════════════════
+# RULE-BASED SIGNATURES (Lớp chặn nhanh trước AI)
+# ══════════════════════════════════════════════════════════
+HARD_BLOCK_PATTERNS = [
+    # SQL Injection
+    (r"(?i)(union\s+(all\s+)?select|sleep\(\d|benchmark\(|0x[0-9a-f]{6,})", "SQLi"),
+    (r"(?i)(;\s*(drop|alter|delete|insert|update)\s+(table|from|into))", "SQLi"),
+    (r"(?i)('\s*(or|and)\s+[\x27\x22]?\d)", "SQLi"),
+    # XSS
+    (r"(?i)(<script[^>]*>|onerror\s*=|onload\s*=|javascript\s*:)", "XSS"),
+    (r"(?i)(document\.(cookie|location|write)|window\.(location|open))", "XSS"),
+    # Path Traversal
+    (r"(\.\./|\.\.\\){2,}", "Path Traversal"),
+    (r"(?i)(/etc/(passwd|shadow|hosts)|/windows/win\.ini|boot\.ini)", "Path Traversal"),
+    # Command Injection
+    (r"(?i)(;\s*(ls|cat|whoami|id|uname|curl|wget|nc|bash|sh|cmd|powershell)\b)", "Command Injection"),
+    (r"(\|\||&&|\$\(|`[^`]+`)", "Command Injection"),
+    # SSRF
+    (r"(?i)(https?://127\.|https?://localhost|https?://0\.0\.0\.0|https?://\[::1\]|file:///)", "SSRF"),
+    (r"(?i)(https?://169\.254\.169\.254|https?://metadata\.google)", "SSRF"),
+]
+
+def rule_based_scan(payload):
+    """Chặn nhanh bằng regex — trả về (label, 'rule') hoặc None."""
+    if not payload or len(payload) < 3:
+        return None
+    for pattern, label in HARD_BLOCK_PATTERNS:
+        if re.search(pattern, payload):
+            return label, 99.9  # Rule-based → confidence 99.9%
+    return None
 
 # Rate limiting
 RATE_LIMIT_NORMAL   = 100   # req/phút cho IP bình thường
@@ -65,6 +135,16 @@ BLACKLIST_DURATION  = 600   # giây — thời gian blacklist (10 phút)
 # Alert webhook (tuỳ chọn — để trống nếu không dùng)
 WEBHOOK_URL = ""  # VD: "https://discord.com/api/webhooks/..." hoặc Telegram bot URL
 ALERT_THRESHOLD = 50  # Số lần BLOCKED trong 1 phút trước khi gửi alert
+
+# ===== GLOBAL COUNTERS =====
+waf_counters = {
+    "total_requests": 0,
+    "total_blocked": 0,
+    "total_allowed": 0,
+    "total_suspicious": 0,
+    "blocks_by_type": defaultdict(int),   # attack_type → count
+    "started_at": None,
+}
 
 
 # ══════════════════════════════════════════════════════════
@@ -369,9 +449,10 @@ def security_filter():
     ip = request.remote_addr
 
     # ── 0. Bỏ qua static files ────────────────────────────
-    if any(request.path.endswith(ext)
-           for ext in ['.js', '.css', '.png', '.jpg', '.svg', '.woff', '.woff2']):
-        return None
+    is_static_path = any(
+        request.path.endswith(ext)
+        for ext in ['.js', '.css', '.png', '.jpg', '.svg', '.woff', '.woff2']
+    )
 
     # ── 1. Kiểm tra IP Blacklist ──────────────────────────
     if ip_blacklist.is_blacklisted(ip):
@@ -393,59 +474,126 @@ def security_filter():
         }), 429
 
     # ── 3. Thu thập payload để scan ───────────────────────
+    waf_counters["total_requests"] += 1
     data_to_scan = list(request.args.values())
+
+    # Scan URL path (chống Path Traversal qua URL trực tiếp)
+    if request.path and request.path != '/':
+        data_to_scan.append(request.path)
+
+    # Scan JSON body
     if request.is_json:
         try:
-            data_to_scan.extend(
-                str(v) for v in request.get_json(silent=True).values() if v
-            )
+            json_data = request.get_json(silent=True)
+            data_to_scan.extend(flatten_payloads(json_data))
         except Exception:
             pass
     elif request.form:
-        data_to_scan.extend(request.form.values())
+        data_to_scan.extend(flatten_payloads(request.form.to_dict(flat=False)))
+    else:
+        raw_body = request.get_data(as_text=True)
+        if raw_body and len(raw_body.strip()) > 1:
+            data_to_scan.append(raw_body)
+
+    # Scan Cookie values
+    for cookie_val in request.cookies.values():
+        if cookie_val and len(cookie_val) > 2:
+            data_to_scan.append(cookie_val)
+
+    # Scan sensitive headers (Referer, User-Agent, Authorization, X-Forwarded-For)
+    for hdr_name in ['Referer', 'User-Agent', 'Authorization', 'X-Forwarded-For', 'X-Custom-Header']:
+        hdr_val = request.headers.get(hdr_name, '')
+        if hdr_val and len(hdr_val) > 5:
+            data_to_scan.append(hdr_val)
+
+    if is_static_path:
+        query_values = list(request.args.values())
+        data_to_scan = [item for item in data_to_scan if item == request.path or item in query_values]
 
     # ── 4. Scan từng payload ──────────────────────────────
     for payload in data_to_scan:
         if not payload or len(str(payload)) < 2:
             continue
 
-        label, confidence = scan_payload(payload)
-        payload_hash = hashlib.sha256(str(payload).encode()).hexdigest()[:8]
+        # URL-decode payload để chống bypass bằng %27, %3C, v.v.
+        decoded_payload = urllib.parse.unquote(str(payload))
+        payloads_to_check = [str(payload)]
+        if decoded_payload != str(payload):
+            payloads_to_check.append(decoded_payload)
 
-        if label != "Normal" and confidence >= THRESHOLD:
-            # Ghi nhận block
-            rate_limiter.flag_ip(ip)
-            just_blacklisted = ip_blacklist.record_block(ip)
-            alert_system.record(ip, label, confidence)
+        for check_payload in payloads_to_check:
+            payload_hash = hashlib.sha256(check_payload.encode()).hexdigest()[:8]
 
-            logger.warning(
-                f"🛡️ [BLOCKED] {label} | {confidence:.1f}% | "
-                f"Hash={payload_hash} | IP={ip}"
-            )
-
-            # Thông báo nếu IP vừa bị blacklist
-            if just_blacklisted:
+            # ── 4a. Rule-Based (Regex) — chặn nhanh ──────
+            rule_result = rule_based_scan(check_payload)
+            if rule_result:
+                label, confidence = rule_result
+                waf_counters["total_blocked"] += 1
+                waf_counters["blocks_by_type"][label] += 1
+                rate_limiter.flag_ip(ip)
+                just_blacklisted = ip_blacklist.record_block(ip)
+                alert_system.record(ip, label, confidence)
                 logger.warning(
-                    f"🚫 [AUTO-BLACKLIST] IP={ip} đã bị blacklist "
-                    f"{BLACKLIST_DURATION//60} phút do tấn công liên tục"
+                    f"⚡ [RULE-BLOCKED] {label} | {confidence:.1f}% | "
+                    f"Hash={payload_hash} | IP={ip}"
                 )
-                alert_logger.warning(
-                    f"AUTO-BLACKLIST | IP={ip} | "
-                    f"Triggered by {BLACKLIST_THRESHOLD} blocks in {BLACKLIST_WINDOW}s"
+                if just_blacklisted:
+                    logger.warning(
+                        f"🚫 [AUTO-BLACKLIST] IP={ip} đã bị blacklist "
+                        f"{BLACKLIST_DURATION//60} phút do tấn công liên tục"
+                    )
+                    alert_logger.warning(
+                        f"AUTO-BLACKLIST | IP={ip} | "
+                        f"Triggered by {BLACKLIST_THRESHOLD} blocks in {BLACKLIST_WINDOW}s"
+                    )
+                return jsonify({
+                    "status": "blocked",
+                    "reason": f"WAF Rule detected {label}",
+                    "confidence": f"{confidence:.1f}%",
+                    "engine": "rule-based"
+                }), 403
+
+            # ── 4b. AI Deep Scan — phân loại chi tiết ─────
+            label, confidence = scan_payload(check_payload)
+
+            if label != "Normal" and confidence >= THRESHOLD:
+                waf_counters["total_blocked"] += 1
+                waf_counters["blocks_by_type"][label] += 1
+                rate_limiter.flag_ip(ip)
+                just_blacklisted = ip_blacklist.record_block(ip)
+                alert_system.record(ip, label, confidence)
+
+                logger.warning(
+                    f"🛡️ [AI-BLOCKED] {label} | {confidence:.1f}% | "
+                    f"Hash={payload_hash} | IP={ip}"
                 )
 
-            return jsonify({
-                "status": "blocked",
-                "reason": f"AI WAF detected {label}",
-                "confidence": f"{confidence:.1f}%"
-            }), 403
+                if just_blacklisted:
+                    logger.warning(
+                        f"🚫 [AUTO-BLACKLIST] IP={ip} đã bị blacklist "
+                        f"{BLACKLIST_DURATION//60} phút do tấn công liên tục"
+                    )
+                    alert_logger.warning(
+                        f"AUTO-BLACKLIST | IP={ip} | "
+                        f"Triggered by {BLACKLIST_THRESHOLD} blocks in {BLACKLIST_WINDOW}s"
+                    )
 
-        elif label != "Normal" and confidence >= 50:
-            logger.info(
-                f"⚠️ [SUSPICIOUS] {label} ({confidence:.1f}%) | "
-                f"Hash={payload_hash} | ALLOWED | IP={ip}"
-            )
+                return jsonify({
+                    "status": "blocked",
+                    "reason": f"AI WAF detected {label}",
+                    "confidence": f"{confidence:.1f}%",
+                    "engine": "ai-bilstm"
+                }), 403
 
+            elif label != "Normal" and confidence >= 50:
+                waf_counters["total_suspicious"] += 1
+                logger.info(
+                    f"⚠️ [SUSPICIOUS] {label} ({confidence:.1f}%) | "
+                    f"Hash={payload_hash} | ALLOWED | IP={ip}"
+                )
+                break
+
+    waf_counters["total_allowed"] += 1
     return None
 
 
@@ -468,6 +616,9 @@ def health_check():
 @app.route('/ai-waf/stats', methods=['GET'])
 def get_stats():
     """Dashboard tổng hợp toàn bộ thống kê."""
+    uptime = None
+    if waf_counters["started_at"]:
+        uptime = str(datetime.now() - waf_counters["started_at"]).split('.')[0]
     return jsonify({
         "model": {
             "accuracy": "93.42%",
@@ -477,11 +628,20 @@ def get_stats():
                 "Path Traversal", "SSRF", "CSRF"
             ]
         },
+        "traffic": {
+            "total_requests":   waf_counters["total_requests"],
+            "total_blocked":    waf_counters["total_blocked"],
+            "total_allowed":    waf_counters["total_allowed"],
+            "total_suspicious": waf_counters["total_suspicious"],
+            "blocks_by_type":   dict(waf_counters["blocks_by_type"]),
+            "block_rate":       f"{(waf_counters['total_blocked'] / max(waf_counters['total_requests'], 1) * 100):.1f}%",
+        },
         "cache":       cache.stats(),
         "rate_limiter": rate_limiter.stats(),
         "blacklist":   ip_blacklist.stats(),
         "alerts":      alert_system.stats(),
         "backend":     backend_health["status"],
+        "uptime":      uptime,
         "timestamp":   datetime.now().isoformat()
     }), 200
 
@@ -506,6 +666,8 @@ def proxy(path):
 
     headers = {k: v for k, v in request.headers
                if k.lower() not in ['host', 'connection']}
+    if WAF_SHARED_SECRET:
+        headers['X-WAF-Secret'] = WAF_SHARED_SECRET
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -546,14 +708,13 @@ def proxy(path):
 # ══════════════════════════════════════════════════════════
 # STARTUP
 # ══════════════════════════════════════════════════════════
-# @app.before_first_request
 def startup():
     logger.info("=" * 60)
-    logger.info("🚀 AI WAF SHIELD — STARTUP")
+    logger.info("🚀 AI WAF SHIELD v3 — STARTUP")
     logger.info("=" * 60)
-    logger.info(f"🌐 Public   : 0.0.0.0:5000")
-    logger.info(f"🔒 Backend  : {REAL_WEB_URL} (internal)")
-    logger.info(f"🧠 Model    : Bi-LSTM | Accuracy: 93.42%")
+    logger.info(f"🌐 WAF      : 0.0.0.0:{WAF_PORT}")
+    logger.info(f"🔒 Backend  : {REAL_WEB_URL} (protected)")
+    logger.info(f"🧠 Engine   : Rule-Based ({len(HARD_BLOCK_PATTERNS)} patterns) + Bi-LSTM AI")
     logger.info(f"🛡️  Threshold: {THRESHOLD}%")
     logger.info(f"⏱️  RateLimit: {RATE_LIMIT_NORMAL}/min normal | "
                 f"{RATE_LIMIT_FLAGGED}/min flagged")
@@ -562,12 +723,57 @@ def startup():
     logger.info(f"🔔 Alert    : threshold={ALERT_THRESHOLD} blocks/min | "
                 f"webhook={'ON' if WEBHOOK_URL else 'OFF'}")
     logger.info(f"💾 Cache    : {MAX_CACHE_SIZE} entries | TTL={CACHE_TTL}s")
+    logger.info(f"🔑 WAF Secret: {'SET' if WAF_SHARED_SECRET else 'OFF'}")
     check_backend_health()
     logger.info(f"📡 Backend  : {backend_health['status']}")
     logger.info("=" * 60)
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description="🛡️ AI WAF Shield — Bảo vệ bất kỳ website nào bằng AI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ví dụ:
+  python modul2_waf.py                                  # Bảo vệ localhost:5170 (mặc định)
+  python modul2_waf.py --target http://192.168.1.10:8080 # Bảo vệ server khác
+  python modul2_waf.py --target https://mysite.com --port 8000
+"""
+    )
+    parser.add_argument(
+        '--target', '-t',
+        type=str,
+        default=None,
+        help='URL của website cần bảo vệ (VD: http://localhost:5170)'
+    )
+    parser.add_argument(
+        '--port', '-p',
+        type=int,
+        default=5000,
+        help='Port mà WAF sẽ lắng nghe (mặc định: 5000)'
+    )
+    args = parser.parse_args()
+
+    # Nếu không truyền --target, hỏi trực tiếp trên terminal
+    if args.target:
+        REAL_WEB_URL = args.target
+    else:
+        print("\n" + "=" * 55)
+        print("🛡️  AI WAF SHIELD — Cấu hình bảo vệ")
+        print("=" * 55)
+        user_input = input(
+            f"🔗 Nhập URL website cần bảo vệ\n"
+            f"   (Enter để dùng mặc định: {REAL_WEB_URL})\n"
+            f"   👉 "
+        ).strip()
+        if user_input:
+            if not user_input.startswith('http'):
+                user_input = 'http://' + user_input
+            REAL_WEB_URL = user_input
+
+    WAF_PORT = args.port
+
     startup()
-    logger.info("⚡ Starting Shield Agent on port 5000...")
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    waf_counters["started_at"] = datetime.now()
+    logger.info(f"⚡ Starting Shield Agent on port {WAF_PORT}...")
+    app.run(host='0.0.0.0', port=WAF_PORT, debug=False, threaded=True)

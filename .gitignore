@@ -45,3 +45,10 @@ vectorizer.pkl
 # OS
 .DS_Store
 Thumbs.db
+
+# Ignored from latest commit
+.env
+shield_alerts.log
+shield_protection.log
+modul3_hacker_brain.py
+
