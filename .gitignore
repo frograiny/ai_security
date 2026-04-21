@@ -34,11 +34,11 @@ ENV/
 *.swp
 *.swo
 
-# Scan reports (auto-generated)
-scan_report*
-scan_log.txt
-shield_alerts.log
-shield_protection.log
+# Scan reports and logs (moved to archive)
+docs/archive/scan_report*
+docs/archive/scan_log.txt
+docs/archive/shield_alerts.log
+docs/archive/shield_protection.log
 
 # Old model files (replaced by model/ directory)
 ai_model.pkl
