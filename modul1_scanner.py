@@ -24,7 +24,45 @@ import logging
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlencode
-from modul3_hacker_brain import HackerBrain
+from groq import Groq
+from dotenv import load_dotenv
+
+# ===== BỘ SINH PAYLOAD AI (ĐỘC LẬP) =====
+class AIPayloadGenerator:
+    """Module tự sinh payload thông minh theo ngữ cảnh, dùng Groq"""
+    def __init__(self):
+        load_dotenv()
+        self.api_key = os.getenv("GROQ_API_KEY")
+        self.client = Groq(api_key=self.api_key) if self.api_key else None
+        
+    def generate_context_payloads(self, attack_type, endpoint_url, param_name, count=3):
+        if not self.client:
+            return []
+        prompt = f'''Bạn là pentester đang kiểm tra endpoint:
+URL: {endpoint_url}
+Tham số: {param_name}
+Loại tấn công: {attack_type}
+
+Tạo {count} payload đặc thù cho ĐÚNG tham số "{param_name}".
+CHỈ TRẢ VỀ MỘT MẢNG JSON (ARRAY) DẠNG CHUỖI, KHÔNG GIẢI THÍCH, KHÔNG MARKDOWN. TRÁNH DÙNG DẤU NHÁY ĐƠN TRONG CHUỖI NẾU KHÔNG THỰC SỰ CẦN, HÃY ESCAPE CHÚNG.
+Ví dụ: ["payload1", "payload2"]
+'''
+        try:
+            resp = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "Return a raw JSON array of strings only."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.1-8b-instant",
+                temperature=0.8,
+            )
+            text = resp.choices[0].message.content.strip()
+            if "[" in text and "]" in text:
+                raw = text[text.find("["):text.rfind("]")+1]
+                return json.loads(raw)
+        except Exception as e:
+            logger.warning(f"  [AI Payload Gen] Lỗi gọi Groq cho {attack_type}: {e}")
+        return []
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
@@ -264,7 +302,7 @@ class VulnerabilityScanner:
     def __init__(self, target_url, ai_brain=False):
         self.target_url = target_url.rstrip('/')
         self.ai_brain_enabled = ai_brain
-        self.hacker_brain = HackerBrain() if self.ai_brain_enabled else None
+        self.ai_generator = AIPayloadGenerator() if self.ai_brain_enabled else None
         self.ai = AIEngine()
         self.ai.load()
         self.session = requests.Session()
@@ -637,8 +675,18 @@ class VulnerabilityScanner:
             path = urlparse(ep['url']).path
             print(f"\n  {Color.BOLD}── Tấn công: {ep['method']} {path}?{ep['param']}=... ──{Color.END}")
 
-            for attack_type, payloads in self._attack_payloads.items():
-                for payload in payloads:
+            for attack_type, static_payloads in self._attack_payloads.items():
+                payloads_to_test = list(static_payloads)
+                if self.ai_brain_enabled and self.ai_generator:
+                    print(f"    {Color.MAGENTA}[AI Payload] Đang suy nghĩ {attack_type} cho '{ep['param']}'...{Color.END}", end="", flush=True)
+                    ai_payloads = self.ai_generator.generate_context_payloads(attack_type, ep['url'], ep['param'], count=3)
+                    if ai_payloads:
+                        payloads_to_test.extend(ai_payloads)
+                        print(f" Xong (+{len(ai_payloads)} payloads)")
+                    else:
+                        print(" Fallback to static.")
+
+                for payload in payloads_to_test:
                     total_tests += 1
                     result = self.attack_endpoint(ep, attack_type, payload)
 
@@ -849,18 +897,7 @@ class VulnerabilityScanner:
 
         # Phase 0: AI Brain (Llama via Groq)
         if self.ai_brain_enabled:
-            import copy
-            print(f"\n{Color.MAGENTA}[Phase 0] 🧠 Brain: Generating AI payloads via Groq...{Color.END}")
-            # Deep copy để KHÔNG mutate global ATTACK_PAYLOADS
-            self._attack_payloads = copy.deepcopy(ATTACK_PAYLOADS)
-            for attack_type in self._attack_payloads.keys():
-                print(f"  [*] Thinking of {attack_type} variations...", end="", flush=True)
-                ai_payloads = self.hacker_brain.generate_creative_payloads(attack_type, count=5)
-                if ai_payloads:
-                    self._attack_payloads[attack_type].extend(ai_payloads)
-                    print(f" Done (+{len(ai_payloads)})")
-                else:
-                    print(" Skipped")
+            print(f"\n{Color.MAGENTA}[Phase 0] 🧠 AI Brain kích hoạt. Các Payload sẽ được sinh độc lập theo ngữ cảnh ở Phase 2...{Color.END}")
 
         # Phase 1: Crawl
         if not self.crawl_target():
@@ -934,10 +971,10 @@ def create_api_server():
                 }), 404
 
             # Phase 2: Attack
-            for ep in scanner.endpoints:
-                for attack_type, payloads in ATTACK_PAYLOADS.items():  # API mode: scanner mới mỗi request, không cần copy
-                    for payload in payloads:
-                        scanner.attack_endpoint(ep, attack_type, payload)
+            scanner.ai_brain_enabled = data.get('ai_brain', False)
+            if scanner.ai_brain_enabled:
+                scanner.ai_generator = AIPayloadGenerator()
+            scanner.run_attacks()
 
             scanner.end_time = time.time()
             duration = scanner.end_time - scanner.start_time

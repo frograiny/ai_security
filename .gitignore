@@ -35,20 +35,24 @@ ENV/
 *.swo
 
 # Scan reports (auto-generated)
-scan_report_*.json
-scan_report_*.md
+scan_report*
+scan_log.txt
+shield_alerts.log
+shield_protection.log
 
 # Old model files (replaced by model/ directory)
 ai_model.pkl
 vectorizer.pkl
 
+# Keylogger (requested to exclude)
+keylogger*
+
 # OS
 .DS_Store
 Thumbs.db
 
-# Ignored from latest commit
+# Environment and Data
 .env
-shield_alerts.log
-shield_protection.log
-modul3_hacker_brain.py
+data/new/
+data_new_variants.csv
 

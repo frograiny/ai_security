@@ -94,6 +94,69 @@ HTML_TEMPLATE = """
             </form>
             <p class="text-xs text-gray-500 mt-2">Lỗ hổng: Không có CSRF token → GET <code class="bg-gray-200">/transfer?to=hacker&amount=999</code></p>
         </div>
+
+        <!-- 7. SSTI Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-pink-700">7. Template Engine (SSTI)</h2>
+            <form action="/ssti" method="GET">
+                <input name="tmpl" type="text" placeholder="Nhập template (vd: {{ 7*7 }})" class="border p-2 w-full rounded mb-2">
+                <button type="submit" class="bg-pink-600 text-white px-4 py-2 rounded hover:bg-pink-700">Hiển thị</button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">Payload test: <code class="bg-gray-200">{{ config.items() }}</code></p>
+        </div>
+
+        <!-- 8. NoSQL Injection Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-cyan-700">8. Tìm kiếm NoSQL (NoSQLi)</h2>
+            <form action="/nosqli" method="GET">
+                <input name="query" type="text" placeholder="Nhập filter (vd: {'$ne': 1})" class="border p-2 w-full rounded mb-2">
+                <button type="submit" class="bg-cyan-600 text-white px-4 py-2 rounded hover:bg-cyan-700">Tra cứu</button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">Payload test: <code class="bg-gray-200">{"$gt": ""}</code></p>
+        </div>
+
+        <!-- 9. XXE Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-teal-700">9. Parse XML (XXE)</h2>
+            <form action="/xxe" method="GET">
+                <input name="xml" type="text" placeholder="Nhập chuỗi XML" class="border p-2 w-full rounded mb-2">
+                <button type="submit" class="bg-teal-600 text-white px-4 py-2 rounded hover:bg-teal-700">Phân tích XML</button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">Payload test: <code class="bg-gray-200">&lt;!ENTITY xxe SYSTEM 'file:///etc/passwd'&gt;</code></p>
+        </div>
+
+        <!-- 10. JWT Bypass Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-indigo-700">10. Đăng nhập JWT</h2>
+            <form action="/jwtauth" method="GET">
+                <input name="token" type="text" placeholder="Nhập Token JWT" class="border p-2 w-full rounded mb-2">
+                <button type="submit" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Xác thực</button>
+            </form>
+            <p class="text-xs text-gray-500 mt-2">Payload test: <code class="bg-gray-200">eyJhbGciOiJub25lIn0...</code> (Thuật toán none)</p>
+        </div>
+
+        <!-- 11. API JSON SQLi Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-emerald-700">11. Đăng nhập API (SQLi JSON)</h2>
+            <form id="json-sqli-form" class="mb-2">
+                <input id="json-sqli-user" type="text" placeholder="Username" class="border p-2 w-full rounded mb-2">
+                <input id="json-sqli-pass" type="text" placeholder="Password" class="border p-2 w-full rounded mb-2">
+                <button type="button" onclick="sendJsonSqli()" class="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700">Login API</button>
+            </form>
+            <div id="json-sqli-result" class="text-xs bg-gray-100 p-2 rounded hidden mt-2 break-all"></div>
+            <p class="text-xs text-gray-500 mt-2">Payload (User): <code class="bg-gray-200">admin' OR '1'='1</code></p>
+        </div>
+
+        <!-- 12. API JSON NoSQLi Test -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-lg font-bold mb-4 text-sky-700">12. Đăng nhập NoSQL (NoSQLi JSON)</h2>
+            <form id="json-nosqli-form" class="mb-2">
+                <textarea id="json-nosqli-data" placeholder='{"username": {"$gt": ""}, "password": {"$gt": ""}}' class="border p-2 w-full rounded mb-2 text-sm" rows="2"></textarea>
+                <button type="button" onclick="sendJsonNosqli()" class="bg-sky-600 text-white px-4 py-2 rounded hover:bg-sky-700">Login NoSQL API</button>
+            </form>
+            <div id="json-nosqli-result" class="text-xs bg-gray-100 p-2 rounded hidden mt-2 break-all"></div>
+            <p class="text-xs text-gray-500 mt-2">Lỗ hổng: Gửi JSON gán toán tử NoSQL</p>
+        </div>
     </div>
     
     <div class="container mx-auto px-8">
@@ -111,6 +174,33 @@ HTML_TEMPLATE = """
         } else {
             document.getElementById('waf-status').innerHTML = "❌ Đang chạy trực tiếp (Port 5173) - KHÔNG CÓ BẢO VỆ!";
             document.getElementById('waf-status').className = "text-red-700 font-bold";
+        }
+
+        // Logic test API JSON
+        function sendJsonSqli() {
+            let u = document.getElementById('json-sqli-user').value;
+            let p = document.getElementById('json-sqli-pass').value;
+            fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username: u, password: p})
+            }).then(r => r.text()).then(t => {
+                let res = document.getElementById('json-sqli-result');
+                res.innerHTML = t; res.classList.remove('hidden');
+            });
+        }
+
+        function sendJsonNosqli() {
+            let data = document.getElementById('json-nosqli-data').value;
+            if (!data) data = '{"username": {"$gt": ""}, "password": {"$gt": ""}}';
+            fetch('/api/nosql-login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: data
+            }).then(r => r.text()).then(t => {
+                let res = document.getElementById('json-nosqli-result');
+                res.innerHTML = t; res.classList.remove('hidden');
+            });
         }
     </script>
 </body>
@@ -194,7 +284,61 @@ def transfer():
     </form>
     """
 
+@app.route('/ssti')
+def ssti():
+    tmpl = request.args.get('tmpl', '')
+    # LỖI SSTI: Sử dụng render_template_string với input trực tiếp chưa qua escape
+    if tmpl:
+        try:
+            return render_template_string(f"Nội dung template trả về: {tmpl}")
+        except Exception as e:
+            return f"Lỗi template: {e}"
+    return "Nhập template để hiển thị"
+
+@app.route('/nosqli')
+def nosqli():
+    query = request.args.get('query', '')
+    # LỖI NoSQLi: Giả lập việc nhận string json filter và thực thi trực tiếp trên DB NoSQL
+    return f"<h3>🔍 Kết quả truy vấn NoSQL:</h3><p>Đã thực thi mảng Filter: <b>{query}</b></p><br><p>Tất cả bản ghi nội bộ đã bị trả về!</p>"
+
+@app.route('/xxe')
+def xxe():
+    xml_data = request.args.get('xml', '')
+    # LỖI XXE: Giả lập việc parse XML trực tiếp mà không tắt tính năng resolver
+    return f"<h3>💥 Đã phân tích XML:</h3><p>Dữ liệu trích xuất (đã load entities SYSTEM): <b>{xml_data}</b></p>"
+
+@app.route('/jwtauth')
+def jwtauth():
+    token = request.args.get('token', '')
+    # LỖI JWT: Giả lập xác thực bằng token dễ bị dính None algorithm/Signature bypass
+    if token.startswith("eyJh"):  # JWT Base64 encoded Header
+        return f"<h3>🔓 Xác thực JWT thành công!</h3><p>Đã bypass bằng token: <b>{token}</b></p><br><p>Quyền: admin</p>"
+    return "Token JWT không hợp lệ"
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.json or {}
+    username = data.get('username', '')
+    password = data.get('password', '')
+    # LỖI SQL INJECTION (JSON Payload): Cộng chuỗi
+    query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
+    try:
+        cursor = db_conn.cursor()
+        cursor.execute(query)
+        results = cursor.fetchall()
+        if results:
+            return f"<b>✅ Đăng nhập thành công:</b> <br>{str(results)}"
+        return "❌ Sai tài khoản/mật khẩu"
+    except Exception as e:
+        return f"Lỗi database: {str(e)}"
+
+@app.route('/api/nosql-login', methods=['POST'])
+def api_nosql_login():
+    data = request.json or {}
+    # LỖI NoSQLi (JSON Payload): Nhận Dict từ user (Gán NoSQL Operators)
+    return f"<b>✅ Đã nhận payload NoSQLi từ JSON:</b> <br>{str(data)} <br>Dữ liệu đã bị bypass!"
+
 if __name__ == '__main__':
     print("🔥 Web mục tiêu (Vulnerable) đang chạy tại http://localhost:5170")
-    print("   Endpoints: /search-user, /feedback, /view-doc, /ping, /fetch-url, /transfer")
+    print("   Endpoints: /search-user, /feedback, /view-doc, /ping, /fetch-url, /transfer, /ssti, /nosqli, /xxe, /jwtauth, /api/login, /api/nosql-login")
     app.run(port=5170)

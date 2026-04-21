@@ -112,6 +112,11 @@ HARD_BLOCK_PATTERNS = [
     # SSRF
     (r"(?i)(https?://127\.|https?://localhost|https?://0\.0\.0\.0|https?://\[::1\]|file:///)", "SSRF"),
     (r"(?i)(https?://169\.254\.169\.254|https?://metadata\.google)", "SSRF"),
+    # Modern Attacks
+    (r"\{\{.*\}\}|%7B%7B.*%7D%7D|<\%=.*\%>|\$\{.*\}", "SSTI"),
+    (r"(?i)(\{\$ne|\{\$gt|\{\$regex|\{\$where)", "NoSQLi"),
+    (r"(?i)(<!ENTITY\s+.*SYSTEM\s+|<!DOCTYPE\s+.*\[\s*<!ENTITY)", "XXE"),
+    (r"(?i)(eyJhbGciOiJub25lIn0\.|eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.$)", "JWTAuth"),
 ]
 
 def rule_based_scan(payload):
@@ -625,7 +630,8 @@ def get_stats():
             "threshold": THRESHOLD,
             "supported_attacks": [
                 "SQLi", "XSS", "Command Injection",
-                "Path Traversal", "SSRF", "CSRF"
+                "Path Traversal", "SSRF", "CSRF",
+                "SSTI", "NoSQLi", "XXE", "JWTAuth"
             ]
         },
         "traffic": {
