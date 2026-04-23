@@ -339,6 +339,6 @@ def api_nosql_login():
     return f"<b>✅ Đã nhận payload NoSQLi từ JSON:</b> <br>{str(data)} <br>Dữ liệu đã bị bypass!"
 
 if __name__ == '__main__':
-    print("🔥 Web mục tiêu (Vulnerable) đang chạy tại http://localhost:5170")
+    print("Web muc tieu (Vulnerable) dang chay tai http://localhost:5170")
     print("   Endpoints: /search-user, /feedback, /view-doc, /ping, /fetch-url, /transfer, /ssti, /nosqli, /xxe, /jwtauth, /api/login, /api/nosql-login")
     app.run(port=5170)

@@ -56,3 +56,8 @@ Thumbs.db
 data/new/
 data_new_variants.csv
 
+# AI Security Testbed specific ignores
+*.db
+scan_report_*
+shield_*.log
+

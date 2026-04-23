@@ -23,46 +23,12 @@ import os
 import logging
 from datetime import datetime
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse, urlencode
-from groq import Groq
+from urllib.parse import urljoin, urlparse, urlencode, quote, quote_plus
+import random
+import copy
 from dotenv import load_dotenv
+from attack_log import AttackLogger
 
-# ===== BỘ SINH PAYLOAD AI (ĐỘC LẬP) =====
-class AIPayloadGenerator:
-    """Module tự sinh payload thông minh theo ngữ cảnh, dùng Groq"""
-    def __init__(self):
-        load_dotenv()
-        self.api_key = os.getenv("GROQ_API_KEY")
-        self.client = Groq(api_key=self.api_key) if self.api_key else None
-        
-    def generate_context_payloads(self, attack_type, endpoint_url, param_name, count=3):
-        if not self.client:
-            return []
-        prompt = f'''Bạn là pentester đang kiểm tra endpoint:
-URL: {endpoint_url}
-Tham số: {param_name}
-Loại tấn công: {attack_type}
-
-Tạo {count} payload đặc thù cho ĐÚNG tham số "{param_name}".
-CHỈ TRẢ VỀ MỘT MẢNG JSON (ARRAY) DẠNG CHUỖI, KHÔNG GIẢI THÍCH, KHÔNG MARKDOWN. TRÁNH DÙNG DẤU NHÁY ĐƠN TRONG CHUỖI NẾU KHÔNG THỰC SỰ CẦN, HÃY ESCAPE CHÚNG.
-Ví dụ: ["payload1", "payload2"]
-'''
-        try:
-            resp = self.client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": "Return a raw JSON array of strings only."},
-                    {"role": "user", "content": prompt}
-                ],
-                model="llama-3.1-8b-instant",
-                temperature=0.8,
-            )
-            text = resp.choices[0].message.content.strip()
-            if "[" in text and "]" in text:
-                raw = text[text.find("["):text.rfind("]")+1]
-                return json.loads(raw)
-        except Exception as e:
-            logger.warning(f"  [AI Payload Gen] Lỗi gọi Groq cho {attack_type}: {e}")
-        return []
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
@@ -82,6 +48,9 @@ logger = logging.getLogger(__name__)
 # ===== CONFIG =====
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
 MAX_LEN = 150
+ORACLE_THRESHOLD = 75.0   # Ngưỡng trigger mutation (% confidence)
+EVASION_THRESHOLD = 50.0  # Nếu conf < giá trị này → coi là evasive
+MAX_MUTATION_ROUNDS = 15  # Greedy hill climbing iterations
 
 # ===== COLOR OUTPUT =====
 class Color:
@@ -216,11 +185,143 @@ VULN_SIGNATURES = {
         r"mysql_native_password",
         r"Kết quả fetch URL",
     ],
-    "CSRF": [
-        r"Chuyển khoản thành công",
-        r"Invalid CSRF",
-    ],
 }
+
+# ===== PAYLOAD MUTATOR =====
+class PayloadMutator:
+    """Tao bien the payload bang cach thay doi bieu dien ky tu.
+
+    Ho tro 2 che do:
+    - mutate_all(): 1 luot, tra ve tat ca bien the (legacy)
+    - guided_mutate(): Greedy Hill Climbing — lap nhieu vong, chon
+      mutation giam confidence nhieu nhat, lap lai tren ket qua tot nhat.
+    """
+    def __init__(self):
+        # 6 mutations chinh (safe)
+        self.strategies = {
+            'case_swap':      self._mutate_case_swap,
+            'url_encode':     self._mutate_url_encode,
+            'html_entity':    self._mutate_html_entity,
+            'sql_comment':    self._mutate_sql_comment,
+            'whitespace':     self._mutate_whitespace,
+            'concat_split':   self._mutate_concat_split,
+        }
+        # 2 mutations risky (mac dinh tat)
+        self.risky_strategies = {
+            'double_encode':  self._mutate_double_encode,
+            'null_byte':      self._mutate_null_byte,
+        }
+
+    def mutate_all(self, payload):
+        """Tra ve list cac bien the payload va ten strategy tuong ung."""
+        results = []
+        for name, func in self.strategies.items():
+            try:
+                mutated = func(payload)
+                if mutated != payload:
+                    results.append({'payload': mutated, 'strategy': name})
+            except Exception:
+                continue
+        return results
+
+    def guided_mutate(self, payload, oracle_fn, max_rounds=MAX_MUTATION_ROUNDS):
+        """Greedy Hill Climbing: mutate -> chon best -> mutate tiep.
+
+        Args:
+            payload: payload goc
+            oracle_fn: function(payload) -> (label, confidence%)
+            max_rounds: so vong toi da (default 15)
+
+        Returns:
+            dict voi lich su mutation tung buoc:
+            {
+                'final_payload': str,
+                'final_confidence': float,
+                'rounds_used': int,
+                'history': [{'round': int, 'payload': str,
+                             'confidence': float, 'strategy': str}],
+                'success': bool,  # confidence < EVASION_THRESHOLD
+                'strategies_used': list[str],
+            }
+        """
+        _, current_conf = oracle_fn(payload)
+        current = payload
+        history = [{
+            'round': 0, 'payload': payload,
+            'confidence': current_conf, 'strategy': 'original'
+        }]
+        strategies_used = []
+        seen = {payload}  # Tranh lap lai payload da thu
+
+        for round_num in range(1, max_rounds + 1):
+            candidates = self.mutate_all(current)
+            # Loc bo cac payload da thu
+            candidates = [c for c in candidates if c['payload'] not in seen]
+            if not candidates:
+                break
+
+            # Evaluate tung candidate
+            best_candidate = None
+            best_conf = current_conf
+
+            for c in candidates:
+                seen.add(c['payload'])
+                _, conf = oracle_fn(c['payload'])
+                if conf < best_conf:
+                    best_conf = conf
+                    best_candidate = c
+
+            if best_candidate is None:
+                break  # Khong tim duoc mutation tot hon -> dung
+
+            current = best_candidate['payload']
+            current_conf = best_conf
+            strategies_used.append(best_candidate['strategy'])
+            history.append({
+                'round': round_num,
+                'payload': current,
+                'confidence': current_conf,
+                'strategy': best_candidate['strategy'],
+            })
+
+            if current_conf < EVASION_THRESHOLD:
+                break  # Da bypass -> dung som
+
+        return {
+            'final_payload': current,
+            'final_confidence': current_conf,
+            'rounds_used': len(history) - 1,
+            'history': history,
+            'success': current_conf < EVASION_THRESHOLD,
+            'strategies_used': strategies_used,
+        }
+
+    def _mutate_case_swap(self, payload):
+        return ''.join([c.upper() if c.islower() else c.lower() for c in str(payload)])
+
+    def _mutate_url_encode(self, payload):
+        return quote(str(payload))
+
+    def _mutate_html_entity(self, payload):
+        return html.escape(str(payload))
+
+    def _mutate_sql_comment(self, payload):
+        s = str(payload)
+        for kw in ['UNION', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'FROM']:
+            s = re.sub(rf'(?i){kw}', f"{kw[:1]}/**/{kw[1:]}", s)
+        return s
+
+    def _mutate_whitespace(self, payload):
+        return str(payload).replace(' ', random.choice(['\t', '\n', '\r']))
+
+    def _mutate_concat_split(self, payload):
+        return str(payload).replace("'", "CHAR(39)")
+
+    def _mutate_double_encode(self, payload):
+        return quote(quote(str(payload)))
+
+    def _mutate_null_byte(self, payload):
+        return str(payload) + "%00"
 
 
 def _infer_endpoint_params(url, method, source_label):
@@ -291,6 +392,27 @@ class AIEngine:
         except:
             return "Unknown", 0.0
 
+    def classify_batch(self, payloads):
+        """Batch classify a list of payloads. Returns list of (label, confidence)."""
+        if not self.loaded:
+            return [("Unknown", 0.0) for _ in payloads]
+        seqs = self.tokenizer.texts_to_sequences([str(p) for p in payloads])
+        pads = pad_sequences(seqs, maxlen=MAX_LEN, padding='post', truncating='post')
+        preds = self.model.predict(pads, verbose=0)
+        results = []
+        for pred in preds:
+            idx = np.argmax(pred)
+            label = self.label_encoder.inverse_transform([idx])[0]
+            confidence = float(pred[idx]) * 100
+            results.append((label, confidence))
+        return results
+
+    def is_detected(self, payload):
+        """Oracle check: returns (detected_bool, label, confidence)."""
+        label, conf = self.classify(payload)
+        detected = (label != "Normal" and conf >= ORACLE_THRESHOLD)
+        return detected, label, conf
+
 
 # ===== SCANNER CHÍNH =====
 class VulnerabilityScanner:
@@ -299,22 +421,37 @@ class VulnerabilityScanner:
     Chủ động tấn công thử vào web mục tiêu, phân tích response.
     """
 
-    def __init__(self, target_url, ai_brain=False):
+    def __init__(self, target_url):
         self.target_url = target_url.rstrip('/')
-        self.ai_brain_enabled = ai_brain
-        self.ai_generator = AIPayloadGenerator() if self.ai_brain_enabled else None
+        self.ai_brain_enabled = False  # Not used, kept for compatibility
         self.ai = AIEngine()
         self.ai.load()
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'AI-SecurityScanner/1.0 (Module1-PenTest)'
         })
-        self.vulnerabilities = []    # Danh sách lỗ hổng phát hiện
-        self.scan_results = []       # Tất cả kết quả scan
-        self.endpoints = []          # Các endpoint tìm được
+        self.vulnerabilities = []    # Danh sach lo hong phat hien
+        self.scan_results = []       # Tat ca ket qua scan
+        self.endpoints = []          # Cac endpoint tim duoc
         self.start_time = None
         self.end_time = None
-        self._attack_payloads = ATTACK_PAYLOADS  # Bản tham chiếu mặc định (không mutate)
+        self._attack_payloads = ATTACK_PAYLOADS  # Ban tham chieu mac dinh
+        self.attack_logger = AttackLogger()  # SQLite attack log
+        self.attack_logger.clear()           # Xoa log cu moi lan scan moi
+        # Stats for adversarial analysis + security metrics
+        self.adv_stats = {
+            'total_original': 0,
+            'model_detected': 0,
+            'mutations_tried': 0,
+            'evasions_found': 0,
+            'mutation_effectiveness': {},
+            # === SECURITY METRICS ===
+            'bypass_rate': 0.0,
+            'attack_success_rate': 0.0,
+            'time_to_bypass_list': [],      # list of seconds
+            'rounds_to_bypass_list': [],    # list of round counts
+            'bypass_payloads': [],          # log payload da bypass
+        }
 
     def banner(self):
         print(f"""
@@ -667,49 +804,146 @@ class VulnerabilityScanner:
             return {'payload': payload, 'error': str(e), 'is_vulnerable': False}
 
     def run_attacks(self):
-        """Phase 2: Gửi tất cả payload vào tất cả endpoint"""
-        print(f"\n{Color.RED}[Phase 2]  Bắt đầu giả lập tấn công...{Color.END}")
+        """Phase 2: Adversarial Greedy Hill Climbing — guided mutation loop."""
+        print(f"\n{Color.RED}[Phase 2]  Bat dau Adversarial Hill Climbing (max {MAX_MUTATION_ROUNDS} rounds)...{Color.END}")
         total_tests = 0
+        mutator = PayloadMutator()
 
         for ep in self.endpoints:
             path = urlparse(ep['url']).path
-            print(f"\n  {Color.BOLD}── Tấn công: {ep['method']} {path}?{ep['param']}=... ──{Color.END}")
+            print(f"\n  {Color.BOLD}-- Tan cong: {ep['method']} {path}?{ep['param']}=... --{Color.END}")
 
             for attack_type, static_payloads in self._attack_payloads.items():
-                payloads_to_test = list(static_payloads)
-                if self.ai_brain_enabled and self.ai_generator:
-                    print(f"    {Color.MAGENTA}[AI Payload] Đang suy nghĩ {attack_type} cho '{ep['param']}'...{Color.END}", end="", flush=True)
-                    ai_payloads = self.ai_generator.generate_context_payloads(attack_type, ep['url'], ep['param'], count=3)
-                    if ai_payloads:
-                        payloads_to_test.extend(ai_payloads)
-                        print(f" Xong (+{len(ai_payloads)} payloads)")
-                    else:
-                        print(" Fallback to static.")
-
-                for payload in payloads_to_test:
+                for payload in static_payloads:
+                    self.adv_stats['total_original'] += 1
                     total_tests += 1
+
+                    # ---- Step 1: Oracle check ----
+                    detected, orig_label, orig_conf = self.ai.is_detected(payload)
+
+                    mutation_result = None
+                    model_evaded = False
+                    best_payload = payload
+                    best_strategy = 'original'
+                    rounds_used = 0
+                    mutation_time = 0.0
+
+                    if detected:
+                        self.adv_stats['model_detected'] += 1
+
+                        # ---- Step 2: Guided Hill Climbing ----
+                        t_start = time.time()
+                        mutation_result = mutator.guided_mutate(
+                            payload, self.ai.classify, MAX_MUTATION_ROUNDS
+                        )
+                        mutation_time = time.time() - t_start
+
+                        self.adv_stats['mutations_tried'] += mutation_result['rounds_used']
+                        rounds_used = mutation_result['rounds_used']
+                        best_payload = mutation_result['final_payload']
+
+                        # Track strategy effectiveness
+                        for s in mutation_result['strategies_used']:
+                            self.adv_stats['mutation_effectiveness'].setdefault(s, 0)
+                            self.adv_stats['mutation_effectiveness'][s] += 1
+
+                        if mutation_result['success']:
+                            model_evaded = True
+                            self.adv_stats['evasions_found'] += 1
+                            self.adv_stats['time_to_bypass_list'].append(mutation_time)
+                            self.adv_stats['rounds_to_bypass_list'].append(rounds_used)
+                            best_strategy = '->'.join(mutation_result['strategies_used'])
+
+                            # Log bypass payload
+                            self.adv_stats['bypass_payloads'].append({
+                                'attack_type': attack_type,
+                                'original': payload,
+                                'bypassed': best_payload,
+                                'conf_original': orig_conf,
+                                'conf_final': mutation_result['final_confidence'],
+                                'strategy_chain': best_strategy,
+                                'rounds': rounds_used,
+                                'time': mutation_time,
+                            })
+
+                    # ---- Step 3: Fire original payload ----
+                    t_fire = time.time()
                     result = self.attack_endpoint(ep, attack_type, payload)
+                    fire_time = time.time() - t_fire
+                    result.update({
+                        'original_confidence': orig_conf,
+                        'oracle_detected': detected,
+                        'model_label': orig_label,
+                    })
 
-                    if result.get('is_vulnerable'):
-                        print(f"    {Color.RED}🔴 VULN{Color.END} [{attack_type}] "
-                              f"{Color.YELLOW}{payload[:50]}{Color.END}")
-                        for ev in result.get('evidence', []):
-                            print(f"         └─ Evidence: {ev[:70]}")
-                    else:
-                        # Chỉ hiện dấu chấm cho SAFE để không spam
-                        pass
+                    # Log to SQLite — original payload
+                    self.attack_logger.log(
+                        original_payload=payload,
+                        mutated_payload=payload,
+                        mutation_type='original',
+                        attempt_number=0,
+                        detected_by='ai' if detected else 'none',
+                        result='blocked' if result.get('status_code') in (403, 429) else 'bypass',
+                        response_time=fire_time,
+                    )
 
-            # Tóm tắt sau mỗi endpoint
-            ep_vulns = [v for v in self.vulnerabilities
-                        if v['endpoint'] == ep['url'] and v['param'] == ep['param']]
-            ep_safe = total_tests - len(ep_vulns)
+                    # ---- Step 4: Fire best evasive payload if different ----
+                    if mutation_result and best_payload != payload:
+                        t_fire2 = time.time()
+                        evasive_result = self.attack_endpoint(ep, attack_type, best_payload)
+                        fire_time2 = time.time() - t_fire2
+
+                        status = evasive_result.get('status_code')
+                        waf_blocked = status in (403, 429)
+                        evasive_result.update({
+                            'original_confidence': orig_conf,
+                            'evasive_confidence': mutation_result['final_confidence'],
+                            'mutation_strategy': best_strategy,
+                            'mutation_rounds': rounds_used,
+                            'model_evaded': model_evaded,
+                            'waf_blocked': waf_blocked,
+                        })
+                        self.scan_results.append(evasive_result)
+                        if evasive_result.get('is_vulnerable'):
+                            self.vulnerabilities.append(evasive_result)
+
+                        # Log to SQLite — mutated payload
+                        self.attack_logger.log(
+                            original_payload=payload,
+                            mutated_payload=best_payload,
+                            mutation_type=best_strategy,
+                            attempt_number=rounds_used,
+                            detected_by='rule' if waf_blocked else ('ai' if not model_evaded else 'none'),
+                            result='blocked' if waf_blocked else 'bypass',
+                            response_time=fire_time2,
+                        )
+
+                        # Print insight
+                        if model_evaded and not waf_blocked:
+                            print(f"    {Color.MAGENTA}BYPASS [{best_strategy}] "
+                                  f"conf {orig_conf:.0f}%->{mutation_result['final_confidence']:.0f}% "
+                                  f"({rounds_used} rounds, {mutation_time:.2f}s){Color.END}")
+                        elif model_evaded and waf_blocked:
+                            print(f"    {Color.YELLOW}MODEL WEAK [{best_strategy}] "
+                                  f"evaded model but WAF rule caught it{Color.END}")
+
+            # ---- Summary per endpoint ----
+            ep_vulns = [v for v in self.vulnerabilities if v.get('endpoint') == ep['url'] and v.get('param') == ep['param']]
             if ep_vulns:
-                print(f"    {Color.RED}⚠️  Endpoint này có {len(ep_vulns)} lỗ hổng!{Color.END}")
+                print(f"    {Color.RED}!! Endpoint nay co {len(ep_vulns)} lo hong!{Color.END}")
             else:
-                print(f"    {Color.GREEN}✅ Endpoint này an toàn{Color.END}")
+                print(f"    {Color.GREEN}OK Endpoint nay an toan{Color.END}")
 
-        print(f"\n  📊 Tổng: {total_tests} payloads đã gửi, "
-              f"{Color.RED}{len(self.vulnerabilities)} lỗ hổng{Color.END} phát hiện")
+        # ---- Compute final security metrics ----
+        stats = self.adv_stats
+        if stats['model_detected'] > 0:
+            stats['bypass_rate'] = stats['evasions_found'] / stats['model_detected'] * 100
+        if stats['total_original'] > 0:
+            stats['attack_success_rate'] = len(self.vulnerabilities) / stats['total_original'] * 100
+
+        print(f"\n  Tong: {total_tests} payloads da gui, "
+              f"{Color.RED}{len(self.vulnerabilities)} lo hong{Color.END} phat hien")
+
 
     # ----- Phase 3: Tạo báo cáo -----
     def print_report(self):
@@ -730,45 +964,45 @@ class VulnerabilityScanner:
 
         if not self.vulnerabilities:
             print(f"\n  {Color.GREEN}{Color.BOLD}✅ KHÔNG TÌM THẤY LỖ HỔNG NÀO!{Color.END}")
-            return
+        else:
+            # Nhóm theo loại
+            vuln_by_type = {}
+            for v in self.vulnerabilities:
+                t = v['attack_type']
+                if t not in vuln_by_type:
+                    vuln_by_type[t] = []
+                vuln_by_type[t].append(v)
 
-        # Nhóm theo loại
-        vuln_by_type = {}
-        for v in self.vulnerabilities:
-            t = v['attack_type']
-            if t not in vuln_by_type:
-                vuln_by_type[t] = []
-            vuln_by_type[t].append(v)
+            print(f"\n  {Color.RED}{Color.BOLD}⚠️  PHÁT HIỆN {len(self.vulnerabilities)} LỖ HỔNG:{Color.END}")
 
-        print(f"\n  {Color.RED}{Color.BOLD}⚠️  PHÁT HIỆN {len(self.vulnerabilities)} LỖ HỔNG:{Color.END}")
+            severity_map = {
+                "SQLi": "🔴 CRITICAL",
+                "Command Injection": "🔴 CRITICAL",
+                "XSS": "🟠 HIGH",
+                "Path Traversal": "🟠 HIGH",
+                "SSRF": "🟠 HIGH",
+                "CSRF": "🟡 MEDIUM",
+            }
 
-        severity_map = {
-            "SQLi": "🔴 CRITICAL",
-            "Command Injection": "🔴 CRITICAL",
-            "XSS": "🟠 HIGH",
-            "Path Traversal": "🟠 HIGH",
-            "SSRF": "🟠 HIGH",
-            "CSRF": "🟡 MEDIUM",
-        }
+            for attack_type, vulns in vuln_by_type.items():
+                severity = severity_map.get(attack_type, "🟡 MEDIUM")
+                print(f"\n  {Color.BOLD}━━━ {severity} — {attack_type} ({len(vulns)} phát hiện) ━━━{Color.END}")
 
-        for attack_type, vulns in vuln_by_type.items():
-            severity = severity_map.get(attack_type, "🟡 MEDIUM")
-            print(f"\n  {Color.BOLD}━━━ {severity} — {attack_type} ({len(vulns)} phát hiện) ━━━{Color.END}")
+                affected = set()
+                for v in vulns:
+                    affected.add(f"{v['method']} {urlparse(v['endpoint']).path}?{v['param']}")
 
-            # Lấy các endpoint bị ảnh hưởng (unique)
-            affected = set()
-            for v in vulns:
-                affected.add(f"{v['method']} {urlparse(v['endpoint']).path}?{v['param']}")
+                print(f"  Endpoints bị ảnh hưởng: {', '.join(list(affected)[:3])}...")
 
-            for ep_str in affected:
-                print(f"    📍 Endpoint: {Color.YELLOW}{ep_str}{Color.END}")
+                for ep_str in list(affected)[:2]:
+                    print(f"    📍 Endpoint: {Color.YELLOW}{ep_str}{Color.END}")
 
-            # Hiện 1-2 payload mẫu
-            print(f"    💣 Payload mẫu:")
-            for v in vulns[:2]:
-                print(f"       • {v['payload'][:60]}")
-                if v['evidence']:
-                    print(f"         └─ {v['evidence'][0][:60]}")
+                # Hiện 1-2 payload mẫu
+                print(f"    💣 Payload mẫu:")
+                for v in vulns[:2]:
+                    print(f"       • {v['payload'][:60]}")
+                    if v['evidence']:
+                        print(f"         └─ {v['evidence'][0][:60]}")
 
         # Điểm số an toàn
         total_endpoints = len(self.endpoints)
@@ -791,6 +1025,83 @@ class VulnerabilityScanner:
 
         print(f"     • Endpoint an toàn: {safe_endpoints}/{total_endpoints}")
         print(f"     • Endpoint có lỗi:  {vuln_endpoints}/{total_endpoints}")
+
+        # === SECURITY METRICS ===
+        stats = self.adv_stats
+        total = stats['total_original']
+        detected = stats['model_detected']
+        mutations = stats['mutations_tried']
+        evasions = stats['evasions_found']
+        
+        if total > 0:
+            print(f"\n{Color.MAGENTA}{Color.BOLD}=== SECURITY METRICS ==={Color.END}")
+            print(f"  Payloads goc:            {total}")
+            print(f"  Model detected:          {detected} ({detected/total*100:.1f}%)")
+            print(f"  Mutation rounds:         {mutations}")
+            print(f"  Evasions thanh cong:     {evasions}")
+
+            # Bypass Rate
+            bypass_rate = stats['bypass_rate']
+            print(f"\n  {Color.BOLD}Bypass Rate:{Color.END}           ", end="")
+            if bypass_rate > 30:
+                print(f"{Color.RED}{bypass_rate:.1f}%{Color.END} (model can retrain)")
+            elif bypass_rate > 10:
+                print(f"{Color.YELLOW}{bypass_rate:.1f}%{Color.END}")
+            else:
+                print(f"{Color.GREEN}{bypass_rate:.1f}%{Color.END}")
+
+            # Attack Success Rate
+            asr = stats['attack_success_rate']
+            print(f"  {Color.BOLD}Attack Success Rate:{Color.END}   {asr:.1f}%")
+
+            # Time to Bypass
+            if stats['time_to_bypass_list']:
+                avg_time = sum(stats['time_to_bypass_list']) / len(stats['time_to_bypass_list'])
+                print(f"  {Color.BOLD}Avg Time to Bypass:{Color.END}    {avg_time:.3f}s")
+
+            # Rounds to Bypass
+            if stats['rounds_to_bypass_list']:
+                avg_rounds = sum(stats['rounds_to_bypass_list']) / len(stats['rounds_to_bypass_list'])
+                print(f"  {Color.BOLD}Avg Rounds to Bypass:{Color.END}  {avg_rounds:.1f} rounds")
+
+            # Top Mutation Strategies
+            if stats['mutation_effectiveness']:
+                print(f"\n  {Color.BOLD}Top Mutation Strategies:{Color.END}")
+                sorted_m = sorted(stats['mutation_effectiveness'].items(), key=lambda x: x[1], reverse=True)
+                for strategy, count in sorted_m[:5]:
+                    print(f"     {strategy}: {count} lan hieu qua")
+
+            # Insight: model_evaded vs waf_blocked
+            model_evaded_waf_blocked = sum(1 for r in self.scan_results if r.get('model_evaded') and r.get('waf_blocked'))
+            model_evaded_waf_pass = sum(1 for r in self.scan_results if r.get('model_evaded') and not r.get('waf_blocked'))
+            
+            print(f"\n  {Color.BOLD}DEFENSE LAYER ANALYSIS:{Color.END}")
+            print(f"     model_evaded + waf_blocked: {model_evaded_waf_blocked} (Rule-based cuu khi AI miss)")
+            print(f"     model_evaded + waf_passed:  {model_evaded_waf_pass} (BYPASS HOAN TOAN)")
+
+            # Bypass Payload Log
+            if stats['bypass_payloads']:
+                print(f"\n  {Color.BOLD}=== BYPASS PAYLOAD LOG ==={Color.END}")
+                for i, bp in enumerate(stats['bypass_payloads'][:5], 1):
+                    print(f"  #{i} [{bp['attack_type']}] "
+                          f"conf {bp['conf_original']:.0f}%->{bp['conf_final']:.0f}% "
+                          f"via {bp['strategy_chain']} ({bp['rounds']} rounds)")
+                    print(f"     Original: {bp['original'][:60]}")
+                    print(f"     Bypassed: {bp['bypassed'][:60]}")
+
+            # SQLite attack log summary
+            db_stats = self.attack_logger.get_total_stats()
+            top_mutations = self.attack_logger.get_top_mutations(3)
+            print(f"\n  {Color.BOLD}=== ATTACK LOG DB ==={Color.END}")
+            print(f"     Total records:    {db_stats['total']}")
+            print(f"     Bypassed:         {db_stats['bypassed']}")
+            print(f"     Blocked:          {db_stats['blocked']}")
+            print(f"     DB Bypass Rate:   {db_stats['bypass_rate']:.1f}%")
+            print(f"     Avg Response:     {db_stats['avg_response_time']:.4f}s")
+            if top_mutations:
+                print(f"     Top mutations (DB):")
+                for mut_type, cnt in top_mutations:
+                    print(f"       {mut_type}: {cnt} bypasses")
 
     def save_report(self, output_path=None):
         """Lưu báo cáo ra file JSON + Markdown"""
@@ -895,9 +1206,6 @@ class VulnerabilityScanner:
         self.banner()
         self.start_time = time.time()
 
-        # Phase 0: AI Brain (Llama via Groq)
-        if self.ai_brain_enabled:
-            print(f"\n{Color.MAGENTA}[Phase 0] 🧠 AI Brain kích hoạt. Các Payload sẽ được sinh độc lập theo ngữ cảnh ở Phase 2...{Color.END}")
 
         # Phase 1: Crawl
         if not self.crawl_target():
@@ -971,9 +1279,6 @@ def create_api_server():
                 }), 404
 
             # Phase 2: Attack
-            scanner.ai_brain_enabled = data.get('ai_brain', False)
-            if scanner.ai_brain_enabled:
-                scanner.ai_generator = AIPayloadGenerator()
             scanner.run_attacks()
 
             scanner.end_time = time.time()
@@ -1083,11 +1388,6 @@ if __name__ == '__main__':
         action='store_true',
         help='Chế độ giám sát liên tục (quét lặp lại sau mỗi khoảng nghỉ)'
     )
-    parser.add_argument(
-        '--ai-brain', '-a',
-        action='store_true',
-        help='Kích hoạt AI Brain (Groq) để sinh thêm payload sáng tạo'
-    )
     args = parser.parse_args()
 
     if args.server:
@@ -1105,20 +1405,19 @@ if __name__ == '__main__':
                 target = 'http://' + target
 
         if args.loop:
-            # KỊCH BẢN CHẠY LIÊN TỤC (Dành cho sau này tích hợp làm WAF)
             print(f"{Color.GREEN} BẮT ĐẦU CHẾ ĐỘ GIÁM SÁT LIÊN TỤC TRÊN: {target}{Color.END}")
             print(f"{Color.YELLOW}Nhấn Ctrl+C để dừng hệ thống.{Color.END}\n")
             try:
-                scanner = VulnerabilityScanner(target, ai_brain=args.ai_brain)
+                scanner = VulnerabilityScanner(target)
                 while True:
                     scanner.run(save_report=args.report)
                     print(f"\n{Color.BLUE} Hoàn tất chu kỳ quét. Nghỉ 60 giây trước khi quét lại...{Color.END}")
-                    time.sleep(60) # Nghỉ 60s để tránh làm nghẽn mạng target
+                    time.sleep(60)
             except KeyboardInterrupt:
                 print(f"\n{Color.RED} Đã dừng giám sát.{Color.END}")
         else:
-            # KỊCH BẢN QUÉT 1 LẦN RỒI HỎI (Như cũ nhưng gọn hơn)
-            scanner = VulnerabilityScanner(target, ai_brain=args.ai_brain)
+            # KỊCH BẢN QUÉT 1 LẦN RỒI HỎI
+            scanner = VulnerabilityScanner(target)
             while True:
                 scanner.run(save_report=args.report)
                 print(f"\n{Color.YELLOW} Bạn có muốn quét lại hoặc thử URL khác không? (y/n): {Color.END}", end="")
