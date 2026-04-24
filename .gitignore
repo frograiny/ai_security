@@ -61,3 +61,10 @@ data_new_variants.csv
 scan_report_*
 shield_*.log
 
+# Internal AI Assistant metadata
+.agents/
+
+# Binary document reports (keeping .md versions)
+docs/reports/*.docx
+*.docx
+

@@ -106,7 +106,8 @@ MODEL_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mod
 MAX_LEN          = 150
 REAL_WEB_URL     = "http://localhost:5170"  # Mặc định — ghi đè bằng --target khi chạy CLI
 WAF_PORT         = 5000                     # Mặc định — ghi đè bằng --port khi chạy CLI
-THRESHOLD        = 75.0
+THRESHOLD_BLOCK  = 90.0                     # Dual-Threshold: Ngưỡng tự tin để Block
+THRESHOLD_ALERT  = 75.0                     # Dual-Threshold: Ngưỡng tự tin để Log cảnh báo (monitor)
 CACHE_TTL        = 300
 MAX_CACHE_SIZE   = 1000
 REQUEST_TIMEOUT  = 10
@@ -154,7 +155,7 @@ RATE_LIMIT_NORMAL   = 100   # req/phút cho IP bình thường
 RATE_LIMIT_FLAGGED  = 10    # req/phút cho IP đã từng bị block
 
 # IP Blacklist
-BLACKLIST_THRESHOLD = 5     # số lần BLOCKED trong cửa sổ thời gian
+BLACKLIST_THRESHOLD = 5000    # số lần BLOCKED trong cửa sổ thời gian
 BLACKLIST_WINDOW    = 60    # giây — cửa sổ đếm
 BLACKLIST_DURATION  = 600   # giây — thời gian blacklist (10 phút)
 
@@ -416,7 +417,7 @@ try:
     with open(os.path.join(MODEL_DIR, 'label_encoder.pkl'), 'rb') as f:
         le = pickle.load(f)
     logger.info("✅ SHIELD AGENT: Bi-LSTM sẵn sàng")
-    logger.info(f"🛡️  Threshold={THRESHOLD}% | Cache={MAX_CACHE_SIZE} | "
+    logger.info(f"🛡️  Threshold: Block={THRESHOLD_BLOCK}% | Alert={THRESHOLD_ALERT}% | Cache={MAX_CACHE_SIZE} | "
                 f"RateLimit={RATE_LIMIT_NORMAL}/min | "
                 f"Blacklist={BLACKLIST_THRESHOLD}hits/{BLACKLIST_WINDOW}s")
 except Exception as e:
@@ -586,18 +587,17 @@ def security_filter():
             # ── 4b. AI Deep Scan — phân loại chi tiết ─────
             label, confidence = scan_payload(check_payload)
 
-            if label != "Normal" and confidence >= THRESHOLD:
+            if label != "Normal" and confidence >= THRESHOLD_BLOCK:
+                # ── BLOCK: Chắc chắn tấn công (≥ 90%) ──
                 waf_counters["total_blocked"] += 1
                 waf_counters["blocks_by_type"][label] += 1
                 rate_limiter.flag_ip(ip)
                 just_blacklisted = ip_blacklist.record_block(ip)
                 alert_system.record(ip, label, confidence)
-
                 logger.warning(
                     f"🛡️ [AI-BLOCKED] {label} | {confidence:.1f}% | "
                     f"Hash={payload_hash} | IP={ip}"
                 )
-
                 if just_blacklisted:
                     logger.warning(
                         f"🚫 [AUTO-BLACKLIST] IP={ip} đã bị blacklist "
@@ -607,22 +607,33 @@ def security_filter():
                         f"AUTO-BLACKLIST | IP={ip} | "
                         f"Triggered by {BLACKLIST_THRESHOLD} blocks in {BLACKLIST_WINDOW}s"
                     )
-
                 return jsonify({
                     "status": "blocked",
                     "reason": f"AI WAF detected {label}",
                     "confidence": f"{confidence:.1f}%",
-                    "engine": "ai-bilstm"
+                    "engine": "ai-bilstm",
+                    "threshold": "hard-block"
                 }), 403
+
+            elif label != "Normal" and confidence >= THRESHOLD_ALERT:
+                # ── MONITOR: Vùng xám (75-89%) — Log + flag IP, không block ──
+                waf_counters["total_suspicious"] += 1
+                waf_counters["blocks_by_type"][label] += 1
+                rate_limiter.flag_ip(ip)
+                alert_system.record(ip, label, confidence)
+                logger.warning(
+                    f"⚠️ [AI-MONITOR] {label} | {confidence:.1f}% | "
+                    f"Hash={payload_hash} | FLAGGED | IP={ip}"
+                )
+                break  # Cho qua nhưng IP đã bị flag → rate limit chặt hơn
 
             elif label != "Normal" and confidence >= 50:
                 waf_counters["total_suspicious"] += 1
                 logger.info(
-                    f"⚠️ [SUSPICIOUS] {label} ({confidence:.1f}%) | "
+                    f"🔍 [SUSPICIOUS] {label} ({confidence:.1f}%) | "
                     f"Hash={payload_hash} | ALLOWED | IP={ip}"
                 )
                 break
-
     waf_counters["total_allowed"] += 1
     return None
 
@@ -638,9 +649,40 @@ def health_check():
         "backend": backend_health["status"],
         "cache": cache.stats(),
         "model": "Bi-LSTM",
-        "threshold": THRESHOLD,
+        "thresholds": {"block": THRESHOLD_BLOCK, "alert": THRESHOLD_ALERT},
         "timestamp": datetime.now().isoformat()
     }), 200
+
+@app.route('/api/report_fp', methods=['POST'])
+def report_false_positive():
+    data = request.get_json()
+    if not data or 'payload' not in data:
+        return jsonify({"error": "Missing payload"}), 400
+    
+    payload = data['payload']
+    # Lưu vào fp_reports.json để dùng cho Continual Learning
+    fp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'fp_reports.json')
+    os.makedirs(os.path.dirname(fp_path), exist_ok=True)
+    
+    fp_entries = []
+    if os.path.exists(fp_path):
+        try:
+            with open(fp_path, 'r', encoding='utf-8') as f:
+                fp_entries = json.load(f)
+        except:
+            pass
+            
+    fp_entries.append({
+        "timestamp": datetime.now().isoformat(),
+        "payload": payload,
+        "reported_ip": request.remote_addr
+    })
+    
+    with open(fp_path, 'w', encoding='utf-8') as f:
+        import json
+        json.dump(fp_entries, f, indent=4)
+        
+    return jsonify({"status": "success", "message": "False positive recorded for retraining"}), 200
 
 
 @app.route('/ai-waf/architecture', methods=['GET'])
@@ -688,7 +730,8 @@ def waf_architecture():
                 "config": {
                     "model": "Bi-LSTM",
                     "accuracy": "97.43%",
-                    "threshold": f"{THRESHOLD}%",
+                    "hard_block_threshold": f"{THRESHOLD_BLOCK}%",
+                    "monitor_threshold": f"{THRESHOLD_ALERT}%",
                     "suspicious_zone": "50-75%",
                 },
                 "description": "Phat hien unknown/mutated payloads",
@@ -708,21 +751,21 @@ def get_stats():
     """Dashboard tổng hợp toàn bộ thống kê."""
     uptime = None
     if waf_counters["started_at"]:
-        uptime = str(datetime.now() - waf_counters["started_at"]).split('.')[0]
+        uptime = datetime.now() - waf_counters["started_at"]
     return jsonify({
         "model": {
             "accuracy": "93.42%",
-            "threshold": THRESHOLD,
+            "thresholds": {"block": BLOCK_THRESHOLD, "log": LOG_THRESHOLD},
             "supported_attacks": [
                 "SQLi", "XSS", "Command Injection",
                 "Path Traversal", "SSRF", "CSRF",
                 "SSTI", "NoSQLi", "XXE", "JWTAuth"
             ]
         },
-        "traffic": {
-            "total_requests":   waf_counters["total_requests"],
-            "total_blocked":    waf_counters["total_blocked"],
+        "stats": {
+            "uptime_seconds": uptime.total_seconds() if uptime else 0,
             "total_allowed":    waf_counters["total_allowed"],
+            "total_blocked":    waf_counters["total_blocked"],
             "total_suspicious": waf_counters["total_suspicious"],
             "blocks_by_type":   dict(waf_counters["blocks_by_type"]),
             "block_rate":       f"{(waf_counters['total_blocked'] / max(waf_counters['total_requests'], 1) * 100):.1f}%",
@@ -775,7 +818,9 @@ def proxy(path):
                 f"✅ [{request.method} /{path}] "
                 f"Status={resp.status_code} | Attempt={attempt+1}"
             )
-            return Response(resp.content, resp.status_code, resp.headers.items())
+            hop_by_hop = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'transfer-encoding', 'upgrade'}
+            headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in hop_by_hop]
+            return Response(resp.content, resp.status_code, headers)
 
         except req_lib.Timeout:
             logger.warning(f"⏱️ Timeout attempt {attempt+1}/{MAX_RETRIES}")
@@ -803,10 +848,10 @@ def startup():
     logger.info("=" * 60)
     logger.info("🚀 AI WAF SHIELD v3 — STARTUP")
     logger.info("=" * 60)
-    logger.info(f"🌐 WAF      : 0.0.0.0:{WAF_PORT}")
+    logger.info(f"🌐 WAF      : 127.0.0.1:{WAF_PORT}")
     logger.info(f"🔒 Backend  : {REAL_WEB_URL} (protected)")
     logger.info(f"🧠 Engine   : Rule-Based ({len(HARD_BLOCK_PATTERNS)} patterns) + Bi-LSTM AI")
-    logger.info(f"🛡️  Threshold: {THRESHOLD}%")
+    logger.info(f"🛡️  Threshold: Block >={THRESHOLD_BLOCK}% | Alert >={THRESHOLD_ALERT}%")
     logger.info(f"⏱️  RateLimit: {RATE_LIMIT_NORMAL}/min normal | "
                 f"{RATE_LIMIT_FLAGGED}/min flagged")
     logger.info(f"🚫 Blacklist: {BLACKLIST_THRESHOLD} blocks/{BLACKLIST_WINDOW}s "
@@ -867,4 +912,11 @@ Ví dụ:
     startup()
     waf_counters["started_at"] = datetime.now()
     logger.info(f"⚡ Starting Shield Agent on port {WAF_PORT}...")
-    app.run(host='0.0.0.0', port=WAF_PORT, debug=False, threaded=True)
+
+    try:
+        from waitress import serve
+        logger.info(f"🚀 Production mode: Waitress WSGI (threads=8)")
+        serve(app, host='127.0.0.1', port=WAF_PORT, threads=8)
+    except ImportError:
+        logger.warning("⚠️ Waitress không có, fallback sang Flask dev server")
+        app.run(host='127.0.0.1', port=WAF_PORT, debug=False, threaded=True)

