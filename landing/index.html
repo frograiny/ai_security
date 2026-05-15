@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI WAF Shield - Enterprise Protection</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --primary: #38bdf8;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            line-height: 1.6;
+        }
+        header {
+            padding: 4rem 2rem;
+            text-align: center;
+            background: linear-gradient(180deg, rgba(56,189,248,0.1) 0%, transparent 100%);
+        }
+        h1 { font-size: 3.5rem; margin-bottom: 1rem; background: -webkit-linear-gradient(#38bdf8, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .subtitle { font-size: 1.2rem; color: var(--text-muted); max-width: 600px; margin: 0 auto 2rem; }
+        .btn { display: inline-block; background: var(--primary); color: #000; padding: 1rem 2rem; border-radius: 8px; text-decoration: none; font-weight: bold; margin: 0.5rem; transition: transform 0.2s; }
+        .btn:hover { transform: translateY(-2px); }
+        .btn-outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); }
+        
+        section { max-width: 1000px; margin: 4rem auto; padding: 0 2rem; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; }
+        .card { background: var(--surface); padding: 2rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
+        .card h3 { color: var(--primary); margin-top: 0; }
+        
+        pre { background: #000; padding: 1.5rem; border-radius: 8px; overflow-x: auto; font-size: 0.9rem; border: 1px solid rgba(255,255,255,0.1); }
+        code { color: #a78bfa; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AI WAF Shield</h1>
+        <p class="subtitle">Bảo vệ web app của bạn khỏi các cuộc tấn công tinh vi nhất bằng sức mạnh của AI Deep Learning (Bi-LSTM). Cài đặt dễ dàng chỉ với 3 dòng code.</p>
+        <a href="#install" class="btn">Get Started</a>
+        <a href="http://localhost:5000" class="btn btn-outline" target="_blank">Live Demo</a>
+    </header>
+
+    <section id="features" class="grid">
+        <div class="card">
+            <h3>🛡️ 5 Lớp Phòng Thủ</h3>
+            <p>Từ Rate Limiting, Canonicalization, Rule-based tới AI Deep Scan. Loại bỏ 99% các nỗ lực tấn công trước khi chúng chạm tới logic backend.</p>
+        </div>
+        <div class="card">
+            <h3>🧠 Bi-LSTM Engine</h3>
+            <p>Phân tích ngữ cảnh vượt trội so với Regex truyền thống. Nhận diện 13 loại tấn công (SQLi, XSS, NoSQLi, SSTI...) với độ chính xác >97%.</p>
+        </div>
+        <div class="card">
+            <h3>📊 Real-time Dashboard</h3>
+            <p>Theo dõi lưu lượng, phân tích các cuộc tấn công theo thời gian thực với biểu đồ trực quan ngay trong app của bạn.</p>
+        </div>
+    </section>
+
+    <section id="install">
+        <h2 style="text-align: center; margin-bottom: 2rem;">Tích hợp trong 60 giây</h2>
+        <div class="card" style="max-width: 700px; margin: 0 auto;">
+            <p>Chỉ cần import và gọi <code>protect(app)</code> trên Flask app của bạn:</p>
+            <pre><code>from flask import Flask
+from ai_waf_shield import AIWafShield
+
+app = Flask(__name__)
+
+# Khởi tạo và bảo vệ app
+waf = AIWafShield()
+waf.protect(app)
+
+@app.route("/")
+def hello():
+    return "Hello, Secure World!"
+</code></pre>
+            <p style="margin-top: 1.5rem; font-size: 0.9rem; color: var(--text-muted);">* Dashboard tự động có sẵn tại <code>/ai-waf/dashboard</code></p>
+        </div>
+    </section>
+    
+    <footer style="text-align: center; padding: 2rem; color: var(--text-muted); border-top: 1px solid rgba(255,255,255,0.05); margin-top: 4rem;">
+        &copy; 2026 AI Security Project.
+    </footer>
+</body>
+</html>

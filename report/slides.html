@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Security Suite — Slides</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800;900&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#FAF6F0;--bg2:#F2EBE0;--card:#E8DDD0;--text:#1A1410;--muted:#7A6A5A;--orange:#C47A5A;--red:#B85868;--green:#3E8C68;--blue:#4878B8;--purple:#7858A8;--mono:'JetBrains Mono',monospace}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);overflow:hidden;height:100vh}
+.deck{position:relative;height:100vh;width:100vw}
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:60px 100px;opacity:0;transform:translateX(40px);transition:all .5s;pointer-events:none}
+.slide.active{opacity:1;transform:translateX(0);pointer-events:auto}
+.slide.prev{opacity:0;transform:translateX(-40px)}
+.tag{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--orange);margin-bottom:16px}
+h1{font-size:52px;font-weight:900;line-height:1.1;margin-bottom:20px;background:linear-gradient(135deg,var(--text),var(--orange));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+h2{font-size:36px;font-weight:800;margin-bottom:16px}
+.sub{font-size:18px;color:var(--muted);max-width:700px;line-height:1.6;margin-bottom:32px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.box{background:var(--card);border:1px solid rgba(0,0,0,.08);border-radius:12px;padding:24px}
+.box:hover{border-color:rgba(196,122,90,.4)}
+.stat{text-align:center;padding:20px}
+.stat .val{font-size:42px;font-weight:900;line-height:1}
+.stat .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:8px}
+.val.red{color:var(--red)}.val.green{color:var(--green)}.val.blue{color:var(--blue)}.val.orange{color:var(--orange)}.val.purple{color:var(--purple)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;padding:10px 14px;background:rgba(0,0,0,.04);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+td{padding:10px 14px;border-bottom:1px solid rgba(0,0,0,.06)}
+.bar{height:8px;border-radius:4px;margin-top:6px}
+.bar-bg{background:rgba(0,0,0,.08);border-radius:4px;overflow:hidden}
+.bar-f{height:8px;border-radius:4px;transition:width 1s}
+code{font-family:var(--mono);font-size:13px;background:rgba(0,0,0,.07);padding:2px 8px;border-radius:4px}
+.layer{display:flex;align-items:center;gap:16px;padding:14px 20px;background:var(--card);border-radius:8px;border-left:4px solid var(--muted);margin-bottom:6px}
+.layer .ln{font-family:var(--mono);font-weight:700;font-size:12px;color:var(--muted);min-width:30px}
+.layer .lt{font-weight:700;flex:1}.layer .ld{font-size:12px;color:var(--muted)}
+.l1{border-color:var(--red)}.l2{border-color:var(--orange)}.l25{border-color:#c8a840}.l3{border-color:var(--blue)}.l4{border-color:var(--purple)}
+.nav{position:fixed;bottom:30px;right:40px;display:flex;gap:10px;z-index:99}
+.nav button{background:var(--card);border:1px solid rgba(0,0,0,.12);color:var(--text);width:44px;height:44px;border-radius:8px;font-size:18px;cursor:pointer}
+.nav button:hover{background:var(--orange);border-color:var(--orange)}
+.pg{position:fixed;bottom:36px;left:40px;font-size:12px;color:var(--muted);font-family:var(--mono)}
+.check{color:var(--green);font-weight:700}.cross{color:var(--muted)}
+.badge{display:inline-block;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700}
+.badge-g{background:rgba(62,140,104,.12);color:var(--green)}.badge-r{background:rgba(184,88,104,.12);color:var(--red)}
+.footer-info{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);font-size:11px;color:rgba(122,106,90,.5)}
+.timeline{position:relative;padding-left:24px}
+.timeline::before{content:'';position:absolute;left:6px;top:0;bottom:0;width:2px;background:rgba(0,0,0,.1)}
+.tl-item{position:relative;padding:8px 0 16px 20px}
+.tl-item::before{content:'';position:absolute;left:-21px;top:12px;width:10px;height:10px;border-radius:50%;background:var(--orange);border:2px solid var(--bg)}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<!-- SLIDE 1: Title -->
+<div class="slide active">
+<div style="background:linear-gradient(135deg,rgba(232,221,208,.6),rgba(242,235,224,.8));border:1px solid rgba(196,122,90,.25);border-radius:16px;padding:48px;backdrop-filter:blur(8px);box-shadow:0 8px 32px rgba(0,0,0,.08)">
+  <div class="tag">Đồ án môn học — ĐH Khoa học Tự nhiên, ĐHQGHN</div>
+  <h1>Hệ thống Kiểm thử và Bảo vệ An ninh Web AI</h1>
+  <p class="sub">WAF sử dụng mô hình Bi-LSTM với cơ chế tấn công đối kháng (Adversarial Attack)</p>
+  <div style="display:flex;gap:32px;color:var(--muted);font-size:14px;margin-top:20px;margin-bottom:0">
+    <div>👤 <strong style="color:var(--text)">Đinh Trường An & Phạm Hoàng Anh</strong></div>
+    <div>🎓 <strong style="color:var(--text)">GVHD: TS. Nguyễn Thị Bích Thủy</strong></div>
+    <div>📅 04/2026</div>
+  </div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;max-width:860px;margin-top:40px">
+<div style="background:var(--card);border-radius:12px;padding:20px 24px;border-left:4px solid var(--orange);border-top:.5px solid rgba(0,0,0,.08);border-right:.5px solid rgba(0,0,0,.08);border-bottom:.5px solid rgba(0,0,0,.08)">
+  <div style="font-size:32px;font-weight:900;color:var(--orange);line-height:1">97.43%</div>
+  <div style="font-size:11px;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.5px">Test Accuracy</div>
+</div>
+<div style="background:var(--card);border-radius:12px;padding:20px 24px;border-left:4px solid var(--red);border-top:.5px solid rgba(0,0,0,.08);border-right:.5px solid rgba(0,0,0,.08);border-bottom:.5px solid rgba(0,0,0,.08)">
+  <div style="font-size:32px;font-weight:900;color:var(--red);line-height:1">13</div>
+  <div style="font-size:11px;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.5px">Nhãn tấn công</div>
+</div>
+<div style="background:var(--card);border-radius:12px;padding:20px 24px;border-left:4px solid var(--blue);border-top:.5px solid rgba(0,0,0,.08);border-right:.5px solid rgba(0,0,0,.08);border-bottom:.5px solid rgba(0,0,0,.08)">
+  <div style="font-size:32px;font-weight:900;color:var(--blue);line-height:1">5</div>
+  <div style="font-size:11px;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.5px">Tầng phòng thủ</div>
+</div>
+<div style="background:var(--card);border-radius:12px;padding:20px 24px;border-left:4px solid var(--green);border-top:.5px solid rgba(0,0,0,.08);border-right:.5px solid rgba(0,0,0,.08);border-bottom:.5px solid rgba(0,0,0,.08)">
+  <div style="font-size:32px;font-weight:900;color:var(--green);line-height:1">0%</div>
+  <div style="font-size:11px;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.5px">Bypass Rate</div>
+</div>
+</div>
+</div>
+
+<!-- SLIDE 2: Vấn đề -->
+<div class="slide">
+<div class="tag">01 — Đặt vấn đề</div>
+<h2>WAF truyền thống đang thất thủ</h2>
+<p class="sub">Signature-based WAF không chống được Obfuscation. Bản thân AI cũng có lỗ hổng trước Adversarial Attacks.</p>
+<div class="grid3">
+<div class="box stat"><div class="val orange">13</div><div class="lbl">Nhãn tấn công</div></div>
+<div class="box stat"><div class="val green">97.43%</div><div class="lbl">Test Accuracy</div></div>
+<div class="box stat"><div class="val blue">5</div><div class="lbl">Tầng phòng thủ</div></div>
+</div>
+<div style="margin-top:24px">
+<table>
+<tr><th>Thách thức</th><th>Giải pháp</th></tr>
+<tr><td>Mất cân bằng dữ liệu</td><td>Class Weight Smoothing (√balanced)</td></tr>
+<tr><td>Bypass bằng encoding</td><td>Recursive Canonicalization (5 vòng)</td></tr>
+<tr><td>False Positive</td><td>Dual-Threshold (90% Block / 75% Monitor)</td></tr>
+</table>
+</div>
+</div>
+
+<!-- SLIDE 3: Kiến trúc -->
+<div class="slide">
+<div class="tag">02 — Kiến trúc hệ thống</div>
+<h2>4 Module lõi</h2>
+<div class="grid2">
+<div class="box" style="border-left:4px solid var(--red)">
+<div style="font-size:20px;margin-bottom:8px">⚔️ M1: Scanner</div>
+<div style="color:var(--muted);font-size:14px">Red Team — Greedy Hill Climbing + 10 loại payload + ThreadPool 4 workers. Tự đột biến payload để bypass AI.</div>
+</div>
+<div class="box" style="border-left:4px solid var(--blue)">
+<div style="font-size:20px;margin-bottom:8px">🛡️ M2: AI WAF</div>
+<div style="color:var(--muted);font-size:14px">Blue Team — Defense-in-Depth 5 tầng. Bi-LSTM 97.43%. Dual-Threshold. Waitress WSGI production.</div>
+</div>
+<div class="box" style="border-left:4px solid var(--purple)">
+<div style="font-size:20px;margin-bottom:8px">🧠 M3: Hacker Brain</div>
+<div style="color:var(--muted);font-size:14px">LLM Qwen3-32B — Context-aware. Đọc HTML → suy luận endpoint ẩn → Exploit Chaining tự động.</div>
+</div>
+<div class="box" style="border-left:4px solid var(--orange)">
+<div style="font-size:20px;margin-bottom:8px">📊 Dashboard</div>
+<div style="color:var(--muted);font-size:14px">Web Visualizer — Điều khiển 3 module từ 1 giao diện. So sánh chéo M1 vs M2 vs M3 real-time.</div>
+</div>
+</div>
+</div>
+
+<!-- SLIDE 4: Mô hình -->
+<div class="slide">
+<div class="tag">03 — Mô hình AI</div>
+<h2>Bi-LSTM Deep Learning</h2>
+<div class="grid2">
+<div class="box">
+<div style="font-weight:700;margin-bottom:12px">Cấu trúc mạng</div>
+<div style="font-family:var(--mono);font-size:13px;line-height:2;color:var(--muted)">
+Input (150 chars)<br>→ <span style="color:var(--orange)">Embedding</span>(10K → 64D)<br>→ <span style="color:var(--orange)">Bi-LSTM</span>(64×2 = 128)<br>→ <span style="color:var(--orange)">GlobalMaxPool1D</span><br>→ <span style="color:var(--orange)">Dense</span>(64) + <span style="color:var(--red)">Dropout(0.5)</span><br>→ <span style="color:var(--green)">Dense</span>(13, softmax)
+</div>
+</div>
+<div>
+<div class="box" style="margin-bottom:16px">
+<div style="font-weight:700;margin-bottom:12px">Không Overfitting</div>
+<table>
+<tr><td>Train Acc</td><td><strong>97.36%</strong></td></tr>
+<tr><td>Val Acc</td><td><strong>97.58%</strong></td></tr>
+<tr><td>Test Acc</td><td><strong style="color:var(--green)">97.43%</strong></td></tr>
+<tr><td>Gap</td><td><strong style="color:var(--green)">~0.2% ✓</strong></td></tr>
+</table>
+</div>
+<div class="box">
+<div style="font-weight:700;margin-bottom:8px">5 cơ chế chống overfit</div>
+<div style="font-size:13px;color:var(--muted);line-height:1.8">
+✓ Dropout 0.5<br>✓ EarlyStopping (p=3)<br>✓ 3-way split (70/15/15)<br>✓ Tokenizer fit train-only<br>✓ Class Weight Smoothing
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- SLIDE 5: Phòng thủ -->
+<div class="slide">
+<div class="tag">04 — Defense-in-Depth</div>
+<h2>Phòng thủ 5 tầng</h2>
+<p class="sub">Mỗi tầng chặn 1 lớp tấn công. Payload phải vượt qua TẤT CẢ mới tới backend.</p>
+<div class="layer l1"><span class="ln">L1</span><span class="lt">IP Blacklist</span><span class="ld">Auto-ban 10 phút sau 5 lần detect</span></div>
+<div class="layer l2"><span class="ln">L2</span><span class="lt">Rate Limiter</span><span class="ld">100 → 10 req/min khi bị flag</span></div>
+<div class="layer l25"><span class="ln">L2.5</span><span class="lt">Canonicalization</span><span class="ld">Recursive URL + HTML decode (5 vòng)</span></div>
+<div class="layer l3"><span class="ln">L3</span><span class="lt">Rule-Based Regex</span><span class="ld">15 patterns — SQLi, XSS, CMDi, SSTI...</span></div>
+<div class="layer l4"><span class="ln">L4</span><span class="lt">AI Bi-LSTM Deep Scan</span><span class="ld">97.43% acc — Dual-Threshold 90%/75%</span></div>
+<div style="margin-top:16px;display:flex;gap:24px;font-size:13px">
+<div><code>≥90%</code> → <strong style="color:var(--red)">BLOCK 403</strong></div>
+<div><code>75-89%</code> → <strong style="color:var(--orange)">MONITOR</strong></div>
+<div><code>&lt;50%</code> → <strong style="color:var(--green)">ALLOW</strong></div>
+</div>
+</div>
+
+<!-- SLIDE 6: Kết quả -->
+<div class="slide">
+<div class="tag">05 — Kết quả thực nghiệm</div>
+<h2>Red Team vs Blue Team</h2>
+<div class="grid4" style="margin-bottom:24px">
+<div class="box stat"><div class="val red">132</div><div class="lbl">Lỗ hổng (không WAF)</div></div>
+<div class="box stat"><div class="val green">0</div><div class="lbl">Lỗ hổng (có WAF)</div></div>
+<div class="box stat"><div class="val red">18</div><div class="lbl">Safety Score trước</div></div>
+<div class="box stat"><div class="val green">91</div><div class="lbl">Safety Score sau</div></div>
+</div>
+<div class="grid2">
+<div class="box">
+<div style="font-weight:700;margin-bottom:12px">⚔️ Scanner vs Backend (không WAF)</div>
+<table>
+<tr><td>Endpoints</td><td><strong>11</strong></td></tr>
+<tr><td>Payloads</td><td><strong>1,333</strong></td></tr>
+<tr><td>Lỗ hổng</td><td><strong style="color:var(--red)">132</strong></td></tr>
+<tr><td>Thời gian</td><td>26 phút</td></tr>
+</table>
+</div>
+<div class="box">
+<div style="font-weight:700;margin-bottom:12px">🛡️ Scanner vs WAF (có bảo vệ)</div>
+<table>
+<tr><td>Tấn công thành công</td><td><strong style="color:var(--green)">0</strong></td></tr>
+<tr><td>Rate Limit triggered</td><td>&lt; 30 giây</td></tr>
+<tr><td>IP Blacklisted</td><td>✓ Auto</td></tr>
+<tr><td>WAF Block Rate</td><td><strong style="color:var(--green)">100%</strong></td></tr>
+</table>
+</div>
+</div>
+<div style="background:rgba(196,122,90,.12);border-left:6px solid var(--orange);border-radius:8px;padding:28px;margin-top:24px;border-top:2px solid var(--orange)">
+  <div style="font-weight:700;color:var(--orange);font-size:14px;text-transform:uppercase;margin-bottom:12px;letter-spacing:.5px">⚡ Kết luận chính</div>
+  <p style="color:var(--text);font-size:15px;line-height:1.8;margin:0">WAF giảm <strong style="color:var(--red)">132 lỗ hổng xuống 0</strong> (100% block rate). Adversarial mutation không bypass được nhờ Canonicalization + Dual-Threshold AI.</p>
+</div>
+</div>
+
+<!-- SLIDE 7: So sánh M1 vs M3 -->
+<div class="slide">
+<div class="tag">06 — So sánh M1 vs M3</div>
+<h2>Ma trận phát hiện lỗ hổng</h2>
+<div class="box">
+<table>
+<tr><th>Loại tấn công</th><th>M1 Scanner</th><th>M3 Hacker Brain</th><th>WAF Chặn</th></tr>
+<tr><td>SQLi</td><td class="check">✓ 100%</td><td class="cross">—</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+<tr><td>XSS</td><td class="check">✓ 100%</td><td class="check">✓ HIGH</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+<tr><td>CMDi</td><td class="cross">—</td><td class="check">✓ CRITICAL</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+<tr><td>SSTI</td><td class="check">✓ 98.3%</td><td class="cross">—</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+<tr><td>NoSQLi</td><td class="check">✓ 99.9%</td><td class="cross">—</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+<tr><td>PathTraversal</td><td class="cross">—</td><td class="check">✓ HIGH</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+<tr><td>IDOR</td><td class="cross">—</td><td class="check">✓ HIGH</td><td><span class="badge badge-g">BLOCKED</span></td></tr>
+</table>
+</div>
+<div style="margin-top:16px;font-size:14px;color:var(--muted)">
+<strong style="color:var(--text)">Nhận xét:</strong> M1 mạnh injection cổ điển. M3 vượt trội logic vuln nhờ LLM. <strong style="color:var(--green)">WAF chặn 100%</strong>.
+</div>
+</div>
+
+<!-- SLIDE 8: Mutation -->
+<div class="slide">
+<div class="tag">07 — Adversarial Robustness</div>
+<h2>Mutation Engine — Bypass rate: 0%</h2>
+<p class="sub">6 chiến lược mutation đều bị WAF chặn nhờ Canonicalization + AI.</p>
+<div class="box">
+<table>
+<tr><th>Chiến lược</th><th>Ví dụ</th><th>Giảm Confidence</th><th>Bypass?</th></tr>
+<tr><td>HTML Entity</td><td><code>&amp;lt;script&amp;gt;</code></td><td>-34.5%</td><td><span class="badge badge-r">❌ L2.5 decode</span></td></tr>
+<tr><td>URL Encode</td><td><code>%3Cscript%3E</code></td><td>-15.2%</td><td><span class="badge badge-r">❌ Canonicalize</span></td></tr>
+<tr><td>Case Swap</td><td><code>&lt;ScRiPt&gt;</code></td><td>-8.7%</td><td><span class="badge badge-r">❌ Regex i-flag</span></td></tr>
+<tr><td>SQL Comment</td><td><code>UN/**/ION</code></td><td>-12.3%</td><td><span class="badge badge-r">❌ AI detect</span></td></tr>
+<tr><td>Whitespace</td><td><code>&lt;script\t&gt;</code></td><td>-5.1%</td><td><span class="badge badge-r">❌ AI detect</span></td></tr>
+<tr><td>Concat Split</td><td><code>SEL'+'ECT</code></td><td>-3.8%</td><td><span class="badge badge-r">❌ AI detect</span></td></tr>
+</table>
+</div>
+</div>
+
+<!-- SLIDE 9: Kết luận -->
+<div class="slide">
+<div class="tag">08 — Kết luận</div>
+<h2>Đóng góp & Hướng phát triển</h2>
+<div class="grid2">
+<div>
+<div class="timeline">
+<div class="tl-item"><strong>Bi-LSTM 97.43%</strong><br><span style="font-size:13px;color:var(--muted)">13 nhãn, 65K mẫu, không overfit</span></div>
+<div class="tl-item"><strong>Defense-in-Depth 5 tầng</strong><br><span style="font-size:13px;color:var(--muted)">Safety Score: 18 → 91/100</span></div>
+<div class="tl-item"><strong>Adversarial Bypass = 0%</strong><br><span style="font-size:13px;color:var(--muted)">6 chiến lược mutation đều bị chặn</span></div>
+<div class="tl-item"><strong>LLM Hacker Brain (Qwen3-32B)</strong><br><span style="font-size:13px;color:var(--muted)">Context-aware + Exploit Chaining</span></div>
+</div>
+</div>
+<div>
+<div class="box" style="margin-bottom:16px;border-left:4px solid var(--orange)">
+<div style="font-weight:700;margin-bottom:8px">🐳 Microservices</div>
+<div style="font-size:13px;color:var(--muted)">Docker Container cho từng Module</div>
+</div>
+<div class="box" style="margin-bottom:16px;border-left:4px solid var(--purple)">
+<div style="font-weight:700;margin-bottom:8px">📊 Threat Intelligence LLM</div>
+<div style="font-size:13px;color:var(--muted)">LLM tự viết báo cáo từ WAF log</div>
+</div>
+<div class="box" style="margin-bottom:16px;border-left:4px solid var(--blue)">
+<div style="font-weight:700;margin-bottom:8px">🤖 Multi-LLM Support</div>
+<div style="font-size:13px;color:var(--muted)">OpenAI, Anthropic, Ollama</div>
+</div>
+<div class="box" style="border-left:4px solid var(--green)">
+<div style="font-weight:700;margin-bottom:8px">🎯 Reinforcement Learning</div>
+<div style="font-size:13px;color:var(--muted)">RL agent tự tìm chiến thuật mới</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- SLIDE 10: Thank you -->
+<div class="slide" style="text-align:center;justify-content:center;align-items:center">
+<h1 style="font-size:48px">Cảm ơn đã lắng nghe!</h1>
+<p class="sub" style="text-align:center;margin:20px auto">Đinh Trường An & Phạm Hoàng Anh<br>GVHD: TS. Nguyễn Thị Bích Thủy — ĐHKHTN, ĐHQGHN</p>
+<div style="display:flex;gap:24px;justify-content:center;margin-top:24px;font-size:14px;color:var(--muted)">
+<div> <strong style="color:var(--text)"></strong> </div>
+</div>
+</div>
+
+</div>
+
+<!-- Navigation -->
+<div class="nav">
+<button onclick="go(-1)">←</button>
+<button onclick="go(1)">→</button>
+</div>
+<div class="pg" id="pg">1 / 10</div>
+<div class="footer-info">AI Security Suite — Slides</div>
+
+<script>
+const slides=document.querySelectorAll('.slide');let cur=0;
+function show(n){slides.forEach((s,i)=>{s.classList.remove('active','prev');if(i===n)s.classList.add('active');else if(i<n)s.classList.add('prev')});document.getElementById('pg').textContent=`${n+1} / ${slides.length}`}
+function go(d){cur=Math.max(0,Math.min(slides.length-1,cur+d));show(cur)}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key===' ')go(1);if(e.key==='ArrowLeft')go(-1)});
+show(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,198 @@
+{
+  "main": {
+    "id": "0a066d77a25755c4",
+    "type": "split",
+    "children": [
+      {
+        "id": "e3c222f8e91fbef7",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "ec203beae17ad36b",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "04-Module-1-Scanner.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "04-Module-1-Scanner"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "b651ce4190818a34",
+    "type": "split",
+    "children": [
+      {
+        "id": "1bb761cedbf33a64",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "facf48e8cdfa4be5",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Trình duyệt tệp"
+            }
+          },
+          {
+            "id": "a7f9bd5d0184967f",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Tìm kiếm"
+            }
+          },
+          {
+            "id": "0c7f682a6b134ff4",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Đánh dấu"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "24bf4da2ce88db81",
+    "type": "split",
+    "children": [
+      {
+        "id": "09dd0782918e952f",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "76ddf1f4ca4cc40f",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "04-Module-1-Scanner.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Liên kết đến của 04-Module-1-Scanner"
+            }
+          },
+          {
+            "id": "9dbc5553ae94d871",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "04-Module-1-Scanner.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Liên kết đi ra từ 04-Module-1-Scanner"
+            }
+          },
+          {
+            "id": "8f88a19980ec6fd1",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Thẻ"
+            }
+          },
+          {
+            "id": "f9b560e15a916602",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Tất cả thuộc tính"
+            }
+          },
+          {
+            "id": "243782b837b320cd",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "04-Module-1-Scanner.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Đề cương của 04-Module-1-Scanner"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Mở bộ chuyển đổi nhanh": false,
+      "graph:Mở xem biểu đồ": false,
+      "canvas:Tạo bảng mới": false,
+      "daily-notes:Mở ghi chú hôm nay": false,
+      "templates:Chèn mẫu": false,
+      "command-palette:Mở khay lệnh": false,
+      "bases:Tạo cơ sở mới": false
+    }
+  },
+  "active": "ec203beae17ad36b",
+  "lastOpenFiles": [
+    "15-Glossary.md",
+    "04-Module-1-Scanner.md",
+    "06-Module-3-HackerBrain.md",
+    "00-MOC.md",
+    "Chưa đặt tên.canvas",
+    "05-Module-2-WAF.md",
+    "03-Mô-Hình-AI-BiLSTM.md",
+    "02-Kiến-Trúc-Hệ-Thống.md",
+    "01-Tổng-Quan-Dự-Án.md"
+  ]
+}

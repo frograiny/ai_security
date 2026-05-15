@@ -10,6 +10,8 @@ Sử dụng:
 """
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import re
 import json
 import time
@@ -521,6 +523,7 @@ class VulnerabilityScanner:
         self.ai = AIEngine()
         self.ai.load()
         self.session = requests.Session()
+        self.session.verify = False  # Bỏ qua lỗi SSL (thích hợp cho pentest/CTF)
         self.session.headers.update({
             'User-Agent': 'AI-SecurityScanner/1.0 (Module1-PenTest)'
         })

@@ -1,9 +1,28 @@
+import argparse
 from flask import Flask, request, render_template_string, send_file
 import os
 import sqlite3
 import subprocess
 
+# Parse arguments for demo
+parser = argparse.ArgumentParser(description="Vulnerable Testbed")
+parser.add_argument('--no-waf', action='store_true', help="Disable AI WAF protection")
+parser.add_argument('--port', type=int, default=5170, help="Port to run on")
+args = parser.parse_args()
+
 app = Flask(__name__)
+
+if not args.no_waf:
+    try:
+        from ai_waf_shield import AIWafShield
+        waf = AIWafShield()
+        waf.protect(app)
+        app.config['WAF_ENABLED'] = True
+    except ImportError:
+        print("Warning: ai_waf_shield not found. Running without WAF.")
+        app.config['WAF_ENABLED'] = False
+else:
+    app.config['WAF_ENABLED'] = False
 
 # Tạo Database giả lập trong bộ nhớ để test SQL Injection
 def init_db():
@@ -167,12 +186,13 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        // Kiểm tra xem có đang chạy qua Proxy 5000 không
-        if (window.location.port == '5000') {
-            document.getElementById('waf-status').innerHTML = "✅ Đang chạy qua AI WAF SHIELD (Port 5000)";
+        // Check if WAF is enabled via backend config
+        const wafEnabled = {{ 'true' if config.get('WAF_ENABLED', False) else 'false' }};
+        if (wafEnabled) {
+            document.getElementById('waf-status').innerHTML = "✅ Đang được bảo vệ bởi AI WAF Shield Middleware";
             document.getElementById('waf-status').className = "text-green-700 font-bold";
         } else {
-            document.getElementById('waf-status').innerHTML = "❌ Đang chạy trực tiếp (Port 5173) - KHÔNG CÓ BẢO VỆ!";
+            document.getElementById('waf-status').innerHTML = "❌ KHÔNG CÓ BẢO VỆ! Hệ thống dễ bị tấn công.";
             document.getElementById('waf-status').className = "text-red-700 font-bold";
         }
 
@@ -339,6 +359,12 @@ def api_nosql_login():
     return f"<b>✅ Đã nhận payload NoSQLi từ JSON:</b> <br>{str(data)} <br>Dữ liệu đã bị bypass!"
 
 if __name__ == '__main__':
-    print("Web muc tieu (Vulnerable) dang chay tai http://localhost:5170")
+    print(f"Web muc tieu (Vulnerable) dang chay tai http://localhost:{args.port}")
+    if app.config.get('WAF_ENABLED'):
+        print("🛡️  AI WAF Shield is ENABLED.")
+        print(f"   Dashboard: http://localhost:{args.port}/ai-waf/dashboard")
+    else:
+        print("⚠️  AI WAF Shield is DISABLED (--no-waf).")
+    
     print("   Endpoints: /search-user, /feedback, /view-doc, /ping, /fetch-url, /transfer, /ssti, /nosqli, /xxe, /jwtauth, /api/login, /api/nosql-login")
-    app.run(port=5170)
+    app.run(port=args.port, host='0.0.0.0')

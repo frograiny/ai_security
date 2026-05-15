@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Security Suite — Báo cáo Tổng kết</title>
+  <link rel="stylesheet" href="report.css">
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<header class="report-header">
+  <div class="container">
+    <div class="header-badge"><span class="dot"></span> BÁO CÁO ĐỒ ÁN MÔN HỌC</div>
+    <h1>Hệ thống Kiểm thử và Bảo vệ An ninh Web AI</h1>
+    <p class="subtitle">Nghiên cứu và triển khai WAF sử dụng mô hình học sâu Bi-LSTM với cơ chế tấn công đối kháng (Adversarial Attack)</p>
+    <div class="header-meta">
+      <div class="meta-item">📍 <strong>ĐH Khoa học Tự nhiên — ĐHQGHN</strong></div>
+      <div class="meta-item">👤 <strong>Đinh Trường An & Phạm Hoàng Anh</strong></div>
+      <div class="meta-item">📅 <strong>Tháng 04/2026</strong></div>
+      <div class="meta-item">🎓 <strong>GVHD: TS. Nguyễn Thị Bích Thủy</strong></div>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+<!-- ===== MỤC LỤC ===== -->
+<nav class="toc">
+  <h3>Mục lục</h3>
+  <ol>
+    <li><a href="#s1">Tổng quan và Đặt vấn đề</a></li>
+    <li><a href="#s2">Kiến trúc Hệ thống (Interactive)</a></li>
+    <li><a href="#s3">Mô hình Bi-LSTM & Phân tích Overfitting</a></li>
+    <li><a href="#s4">Phòng thủ Đa tầng (Interactive)</a></li>
+    <li><a href="#s5">Kết quả Thực nghiệm Đối kháng</a></li>
+    <li><a href="#s6">Demo: Payload Flow (Interactive)</a></li>
+    <li><a href="#s7">Demo: Mutation Engine (Interactive)</a></li>
+    <li><a href="#s8">Kết luận & Hướng phát triển</a></li>
+  </ol>
+</nav>
+
+<!-- ===== SECTION 1: TỔNG QUAN ===== -->
+<section class="section" id="s1">
+  <div class="section-label"><span class="num">01</span> TỔNG QUAN</div>
+  <h2>Đặt vấn đề</h2>
+  <p class="section-desc">WAF truyền thống dựa trên luật (Signature-based) đang thất thủ trước kỹ thuật Obfuscation. Bản thân mô hình AI cũng có lỗ hổng khi đối mặt Adversarial Attacks.</p>
+
+  <div class="grid-3" style="margin-bottom:24px">
+    <div class="stat-box">
+      <div class="stat-value orange" data-count="13" data-suffix="">0</div>
+      <div class="stat-label">Nhãn phân loại</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value green" data-count="97.43" data-suffix="%">0</div>
+      <div class="stat-label">Accuracy (Test)</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value blue" data-count="5">0</div>
+      <div class="stat-label">Tầng phòng thủ</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Ba trụ cột kỹ thuật</div>
+    <table class="data-table">
+      <thead><tr><th>Trụ cột</th><th>Mô tả</th><th>Giải pháp</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Nhận diện đa lớp</strong></td><td>Phân loại 13 nhãn (12 tấn công + Normal)</td><td>Bi-LSTM + Character-level Tokenizer</td></tr>
+        <tr><td><strong>Kiểm thử tự động</strong></td><td>AI tự dò tìm và khai thác lỗ hổng</td><td>Greedy Hill Climbing + LLM (Qwen3-32B)</td></tr>
+        <tr><td><strong>Phòng thủ chủ động</strong></td><td>WAF tự học từ sai lầm</td><td>Continual Learning (LR=1e-5)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Thách thức kỹ thuật đã giải quyết</div>
+    <table class="data-table">
+      <thead><tr><th>Thách thức</th><th>Giải pháp</th></tr></thead>
+      <tbody>
+        <tr><td>Mất cân bằng dữ liệu (Normal: 36K vs NoSQLi: 33)</td><td>Class Weight Smoothing (√balanced)</td></tr>
+        <tr><td>OOV với tiếng Việt</td><td>Character-level Tokenizer</td></tr>
+        <tr><td>Bypass WAF bằng encoding</td><td>Recursive Canonicalization (5 vòng)</td></tr>
+        <tr><td>False Positive</td><td>Dual-Threshold (90% Block / 75% Monitor)</td></tr>
+        <tr><td>Độ trễ real-time</td><td>LRU Cache (TTL 300s, 1000 entry)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ===== SECTION 2: KIẾN TRÚC ===== -->
+<section class="section" id="s2">
+  <div class="section-label"><span class="num">02</span> KIẾN TRÚC</div>
+  <h2>Hệ thống 4 Module lõi</h2>
+  <p class="section-desc">Click vào từng module để xem chi tiết. Các đường kết nối sẽ hiện thị luồng dữ liệu.</p>
+
+  <div style="position:relative;min-height:340px;margin-bottom:20px">
+    <svg class="diagram-svg" viewBox="0 0 1000 320" preserveAspectRatio="xMidYMid meet">
+      <line class="conn-scanner" x1="230" y1="70" x2="500" y2="70"/>
+      <line class="conn-waf conn-scanner" x1="620" y1="70" x2="800" y2="160"/>
+      <line class="conn-hacker" x1="230" y1="240" x2="500" y2="240"/>
+      <line class="conn-hacker conn-waf" x1="500" y1="200" x2="500" y2="110"/>
+      <line class="conn-backend conn-waf" x1="800" y1="200" x2="800" y2="280"/>
+      <line class="conn-dashboard" x1="100" y1="160" x2="100" y2="60"/>
+    </svg>
+
+    <div class="arch-node red-team" data-key="scanner" style="left:120px;top:30px">
+      <div class="node-title" style="color:var(--accent-red)">⚔️ M1: Scanner</div>
+      <div class="node-sub">Red Team — Adversarial</div>
+    </div>
+    <div class="arch-node blue-team" data-key="waf" style="left:400px;top:30px">
+      <div class="node-title" style="color:var(--accent-blue)">🛡️ M2: AI WAF</div>
+      <div class="node-sub">Blue Team — Defense</div>
+    </div>
+    <div class="arch-node purple-team" data-key="hacker" style="left:120px;top:200px">
+      <div class="node-title" style="color:var(--accent-purple)">🧠 M3: Hacker Brain</div>
+      <div class="node-sub">LLM Qwen3-32B</div>
+    </div>
+    <div class="arch-node" data-key="backend" style="left:400px;top:200px">
+      <div class="node-title">🎯 Backend</div>
+      <div class="node-sub">webtest.py :5170</div>
+    </div>
+    <div class="arch-node" data-key="dashboard" style="left:680px;top:110px">
+      <div class="node-title">📊 Dashboard</div>
+      <div class="node-sub">Visualizer :8080</div>
+    </div>
+  </div>
+  <div class="node-detail" id="node-detail"></div>
+</section>
+
+<!-- ===== SECTION 3: MÔ HÌNH ===== -->
+<section class="section" id="s3">
+  <div class="section-label"><span class="num">03</span> MÔ HÌNH AI</div>
+  <h2>Bi-LSTM Deep Learning</h2>
+  <p class="section-desc">Mạng neural 2 chiều cho phép nhìn cả "quá khứ" và "tương lai" của ký tự trong chuỗi payload.</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Cấu trúc mạng Neural</div>
+      <div class="code-block">
+Input (150 ký tự)<br>
+  │<br>
+  ▼<br>
+<span class="keyword">Embedding</span>(10000 → 64D)<br>
+  │<br>
+  ▼<br>
+<span class="keyword">Bidirectional LSTM</span>(64 × 2 = 128)<br>
+  │<br>
+  ▼<br>
+<span class="keyword">GlobalMaxPooling1D</span><br>
+  │<br>
+  ▼<br>
+<span class="keyword">Dense</span>(64, relu) + <span class="keyword">Dropout</span>(0.5)<br>
+  │<br>
+  ▼<br>
+<span class="keyword">Dense</span>(13, softmax) → Output
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Hyperparameters</div>
+      <table class="data-table">
+        <thead><tr><th>Tham số</th><th>Giá trị</th></tr></thead>
+        <tbody>
+          <tr><td>MAX_LEN</td><td>150 ký tự</td></tr>
+          <tr><td>Embedding dim</td><td>64</td></tr>
+          <tr><td>LSTM units</td><td>64 (×2 chiều)</td></tr>
+          <tr><td>Dropout</td><td>0.5</td></tr>
+          <tr><td>Optimizer</td><td>Adam</td></tr>
+          <tr><td>Batch size</td><td>64</td></tr>
+          <tr><td>Epochs</td><td>20 (EarlyStopping p=3)</td></tr>
+          <tr><td>Tokenizer</td><td>Character-level + OOV</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <div class="card-title">Kết quả huấn luyện</div>
+    <div class="grid-4" style="margin-bottom:20px">
+      <div class="stat-box"><div class="stat-value green" data-count="97.43" data-suffix="%">0</div><div class="stat-label">Test Accuracy</div></div>
+      <div class="stat-box"><div class="stat-value orange" data-count="65643">0</div><div class="stat-label">Tổng mẫu train</div></div>
+      <div class="stat-box"><div class="stat-value blue" data-count="9847">0</div><div class="stat-label">Mẫu test</div></div>
+      <div class="stat-box"><div class="stat-value purple" data-count="25" data-suffix="ms">0</div><div class="stat-label">Inference time</div></div>
+    </div>
+    <div class="card-title" style="margin-top:16px">AI Confidence trên payload thử nghiệm</div>
+    <div class="bar-chart">
+      <div class="bar-row"><span class="bar-label">admin' OR 1 → SQLi</span><div class="bar-track"><div class="bar-fill red" data-width="99.5%"></div></div><span class="bar-val">99.5%</span></div>
+      <div class="bar-row"><span class="bar-label">&lt;img onerror&gt; → XSS</span><div class="bar-track"><div class="bar-fill red" data-width="100%"></div></div><span class="bar-val">100%</span></div>
+      <div class="bar-row"><span class="bar-label">cat /etc/passwd → CMDi</span><div class="bar-track"><div class="bar-fill red" data-width="99.4%"></div></div><span class="bar-val">99.4%</span></div>
+      <div class="bar-row"><span class="bar-label">{{7*7}} → SSTI</span><div class="bar-track"><div class="bar-fill orange" data-width="98.3%"></div></div><span class="bar-val">98.3%</span></div>
+      <div class="bar-row"><span class="bar-label">{"$gt":""} → NoSQLi</span><div class="bar-track"><div class="bar-fill orange" data-width="99.9%"></div></div><span class="bar-val">99.9%</span></div>
+      <div class="bar-row"><span class="bar-label">XXE Entity → XXE</span><div class="bar-track"><div class="bar-fill orange" data-width="99.96%"></div></div><span class="bar-val">99.96%</span></div>
+      <div class="bar-row"><span class="bar-label">JWT none alg → JWTAuth</span><div class="bar-track"><div class="bar-fill purple" data-width="100%"></div></div><span class="bar-val">100%</span></div>
+      <div class="bar-row"><span class="bar-label">Tiếng Việt → Normal</span><div class="bar-track"><div class="bar-fill green" data-width="100%"></div></div><span class="bar-val">100%</span></div>
+    </div>
+  </div>
+
+  <!-- WHY Bi-LSTM -->
+  <div class="card" style="margin-top:20px">
+    <div class="card-title">Tại sao chọn Bi-LSTM?</div>
+    <table class="data-table">
+      <thead><tr><th>Tiêu chí</th><th>CNN / MLP</th><th>Bi-LSTM (chọn)</th><th>Lý do</th></tr></thead>
+      <tbody>
+        <tr><td>Ngữ cảnh tuần tự</td><td>❌ Chỉ local pattern</td><td>✓ Nhìn toàn bộ chuỗi</td><td>Payload tấn công phụ thuộc thứ tự ký tự (<code>' OR 1=1--</code> khác <code>1=1 OR '--</code>)</td></tr>
+        <tr><td>Bidirectional</td><td>❌</td><td>✓ Đọc 2 chiều</td><td>Phát hiện <code>&lt;script&gt;...&lt;/script&gt;</code> cần nhìn cả tag đóng phía sau</td></tr>
+        <tr><td>Character-level</td><td>Word-level phổ biến</td><td>✓ Char-level</td><td>Payload không phải ngôn ngữ tự nhiên — <code>%3C</code>, <code>{{7*7}}</code> không có trong từ điển word</td></tr>
+        <tr><td>OOV handling</td><td>Yếu</td><td>✓ Mạnh</td><td>Tiếng Việt Unicode, emoji, ký tự đặc biệt đều được xử lý ở mức ký tự</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- OVERFITTING ANALYSIS -->
+  <div class="card" style="margin-top:20px;border-left:3px solid var(--accent-green)">
+    <div class="card-title">🔬 Phân tích Overfitting — Tại sao model KHÔNG bị overfit?</div>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">
+      Khi nhìn biểu đồ confidence 98-100%, câu hỏi tự nhiên là: <em>"Model có đang học thuộc dữ liệu?"</em>. 
+      Câu trả lời: <strong>Không</strong>. Dưới đây là 5 bằng chứng cụ thể.
+    </p>
+
+    <!-- Evidence 1: Train vs Val vs Test gap -->
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px">① Gap Train / Val / Test rất nhỏ</div>
+    <table class="data-table" style="margin-bottom:16px">
+      <thead><tr><th>Metric</th><th>Train</th><th>Validation</th><th>Test (độc lập)</th><th>Gap</th></tr></thead>
+      <tbody>
+        <tr><td>Accuracy</td><td>97.36%</td><td>97.58%</td><td><strong>97.43%</strong></td><td style="color:var(--accent-green)">~0.2% ✓</td></tr>
+        <tr><td>Loss</td><td>0.0708</td><td>0.0760</td><td><strong>0.0858</strong></td><td style="color:var(--accent-green)">~0.015 ✓</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px">
+      <strong>Giải thích:</strong> Nếu overfitting, train accuracy sẽ rất cao (>99%) nhưng test accuracy sẽ thấp hơn nhiều (gap >5%). 
+      Ở đây gap chỉ ~0.2% — model generalize tốt sang dữ liệu chưa từng thấy.
+    </p>
+
+    <!-- Evidence 2: Training curve -->
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px">② Đường cong huấn luyện không phân kỳ</div>
+    <div class="bar-chart" style="margin-bottom:8px">
+      <div class="bar-row"><span class="bar-label" style="min-width:80px">Epoch 1</span><div class="bar-track"><div class="bar-fill orange" data-width="77%"></div></div><span class="bar-val">77.0%</span></div>
+      <div class="bar-row"><span class="bar-label" style="min-width:80px">Epoch 5</span><div class="bar-track"><div class="bar-fill orange" data-width="94.4%"></div></div><span class="bar-val">94.4%</span></div>
+      <div class="bar-row"><span class="bar-label" style="min-width:80px">Epoch 10</span><div class="bar-track"><div class="bar-fill orange" data-width="96.1%"></div></div><span class="bar-val">96.1%</span></div>
+      <div class="bar-row"><span class="bar-label" style="min-width:80px">Epoch 15</span><div class="bar-track"><div class="bar-fill green" data-width="96.9%"></div></div><span class="bar-val">96.9%</span></div>
+      <div class="bar-row"><span class="bar-label" style="min-width:80px">Epoch 20</span><div class="bar-track"><div class="bar-fill green" data-width="97.4%"></div></div><span class="bar-val">97.4%</span></div>
+    </div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Train Accuracy theo epoch (Val accuracy tương tự — không phân kỳ)</p>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:20px">
+      <strong>Giải thích:</strong> Khi overfitting, val_loss sẽ <em>tăng</em> trong khi train_loss tiếp tục giảm (đường cong "mở miệng cá sấu"). 
+      Ở đây, val_loss <em>giảm đều</em> từ 0.32 → 0.076 suốt 20 epoch — không hề phân kỳ.
+    </p>
+
+    <!-- Evidence 3: 5 mechanisms -->
+    <div style="font-size:14px;font-weight:700;margin-bottom:12px">③ 5 cơ chế chống Overfitting đã áp dụng</div>
+    <table class="data-table" style="margin-bottom:16px">
+      <thead><tr><th>#</th><th>Cơ chế</th><th>Chi tiết</th><th>Tại sao hiệu quả</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><strong>Dropout 0.5</strong></td><td>Tắt ngẫu nhiên 50% neuron mỗi batch</td><td>Buộc model không phụ thuộc vào bất kỳ neuron đơn lẻ nào — giảm co-adaptation</td></tr>
+        <tr><td>2</td><td><strong>EarlyStopping</strong></td><td>patience=3, restore_best_weights</td><td>Nếu val_loss không giảm sau 3 epoch → dừng + quay về trọng số tốt nhất</td></tr>
+        <tr><td>3</td><td><strong>3-way Split</strong></td><td>70% train / 15% val / 15% test</td><td>Test set <em>hoàn toàn độc lập</em> — không tham gia tuning hay stopping</td></tr>
+        <tr><td>4</td><td><strong>Tokenizer chỉ fit trên train</strong></td><td>tokenizer.fit_on_texts(X_train)</td><td>Chống data leakage — test set không ảnh hưởng vocabulary</td></tr>
+        <tr><td>5</td><td><strong>Class Weight Smoothing</strong></td><td>√(balanced_weight)</td><td>Nhãn hiếm (NoSQLi: 99 mẫu) được tăng trọng số hợp lý mà không gây overfit</td></tr>
+      </tbody>
+    </table>
+
+    <!-- Evidence 4: Why 98-100% is legitimate -->
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px">④ Tại sao confidence 98-100% là hợp lý?</div>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+      Các payload test (<code>admin' OR 1</code>, <code>&lt;script&gt;alert(1)&lt;/script&gt;</code>) là <strong>mẫu kinh điển</strong> 
+      — chúng nằm <em>rất gần tâm phân bố</em> của từng lớp trong không gian embedding. Model <em>đúng</em> khi tự tin cao ở đây.
+    </p>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+      Bằng chứng: Khi test payload <strong>mơ hồ hơn</strong>, confidence giảm đáng kể:
+    </p>
+    <table class="data-table" style="margin-bottom:16px">
+      <thead><tr><th>Payload</th><th>Confidence</th><th>Giải thích</th></tr></thead>
+      <tbody>
+        <tr><td><code>admin' OR 1</code></td><td><strong style="color:var(--accent-red)">99.5%</strong></td><td>Mẫu kinh điển — nằm đúng tâm phân bố SQLi</td></tr>
+        <tr><td><code>../../../../etc/shadow</code></td><td><strong style="color:var(--accent-orange)">50.7%</strong></td><td>Mơ hồ — giống URL path bình thường, model không chắc chắn</td></tr>
+        <tr><td><code>Xin chào tôi muốn tìm tài liệu</code></td><td><strong style="color:var(--accent-green)">100%</strong> (Normal)</td><td>Tiếng Việt thuần túy — hoàn toàn khác pattern tấn công</td></tr>
+        <tr><td><code>http://localhost:5173/api/users</code></td><td><strong style="color:var(--accent-green)">100%</strong> (Normal)</td><td>URL hợp lệ — đã bơm 2000 mẫu Normal URL vào training</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+      <strong>Kết luận:</strong> Model tự tin cao khi input rõ ràng, và <em>giảm confidence tự nhiên</em> khi input mơ hồ 
+      — đúng hành vi của một model generalize tốt, <strong>không phải overfit</strong>.
+    </p>
+
+    <!-- Evidence 5: Data diversity -->
+    <div style="font-size:14px;font-weight:700;margin-bottom:8px">⑤ Dữ liệu đa dạng từ nhiều nguồn</div>
+    <table class="data-table">
+      <thead><tr><th>Nguồn</th><th>Mẫu</th><th>Vai trò</th></tr></thead>
+      <tbody>
+        <tr><td>HttpParamsDataset (Kaggle)</td><td>~63K</td><td>SQLi, XSS, CMDi, Path Traversal cơ bản</td></tr>
+        <tr><td>XSS_dataset (Kaggle)</td><td>13.6K</td><td>XSS chuyên sâu</td></tr>
+        <tr><td>Modified_SQL_Dataset</td><td>30.9K</td><td>SQLi nâng cao</td></tr>
+        <tr><td>PayloadsAllTheThings (GitHub)</td><td>~6K</td><td>CMDi, SSRF, Path Traversal thực tế</td></tr>
+        <tr><td>data_new_variants.csv (tự tạo)</td><td>9.7K</td><td>SSTI, NoSQLi, XXE, JWTAuth — loại tấn công mới</td></tr>
+        <tr><td>Normal URL + Tiếng Việt</td><td>2.5K</td><td>Chống false positive cho SSRF và tiếng Việt</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:13px;color:var(--text-secondary);margin-top:8px">
+      Tổng cộng <strong>65,643 mẫu</strong> từ <strong>7+ nguồn độc lập</strong>. 
+      Sau dedup loại 51,535 mẫu trùng → dữ liệu thực sự đa dạng, không phải copy-paste.
+    </p>
+  </div>
+</section>
+
+<!-- ===== SECTION 4: PHÒNG THỦ ĐA TẦNG ===== -->
+<section class="section" id="s4">
+  <div class="section-label"><span class="num">04</span> DEFENSE-IN-DEPTH</div>
+  <h2>Phòng thủ Đa tầng</h2>
+  <p class="section-desc">Click vào từng lớp phòng thủ để xem chi tiết cơ chế hoạt động.</p>
+
+  <div class="grid-2">
+    <div>
+      <div class="defense-stack">
+        <div class="defense-layer l1" data-layer="l1">
+          <span class="layer-num">L1</span>
+          <span class="layer-name">IP Blacklist</span>
+          <span class="layer-desc">Auto-ban 10 phút</span>
+        </div>
+        <div class="defense-layer l2" data-layer="l2">
+          <span class="layer-num">L2</span>
+          <span class="layer-name">Rate Limiter</span>
+          <span class="layer-desc">100 → 10 req/min</span>
+        </div>
+        <div class="defense-layer l25" data-layer="l25">
+          <span class="layer-num">L2.5</span>
+          <span class="layer-name">Canonicalization</span>
+          <span class="layer-desc">Recursive decode</span>
+        </div>
+        <div class="defense-layer l3" data-layer="l3">
+          <span class="layer-num">L3</span>
+          <span class="layer-name">Rule-Based Regex</span>
+          <span class="layer-desc">15 patterns</span>
+        </div>
+        <div class="defense-layer l4" data-layer="l4">
+          <span class="layer-num">L4</span>
+          <span class="layer-name">AI Bi-LSTM Deep Scan</span>
+          <span class="layer-desc">97.43% accuracy</span>
+        </div>
+      </div>
+      <div class="node-detail" id="layer-info" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Dual-Threshold Mechanism</div>
+      <table class="data-table">
+        <thead><tr><th>Confidence</th><th>Hành động</th><th>HTTP</th></tr></thead>
+        <tbody>
+          <tr><td><span class="severity critical">≥ 90%</span></td><td>🔴 BLOCK cứng</td><td>403</td></tr>
+          <tr><td><span class="severity high">75% – 89%</span></td><td>🟡 MONITOR + Flag IP</td><td>200*</td></tr>
+          <tr><td><span class="severity medium">50% – 74%</span></td><td>🔵 LOG only</td><td>200</td></tr>
+          <tr><td><span class="severity low">< 50%</span></td><td>✅ ALLOW</td><td>200</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:16px">
+        <div class="card-title">Canonicalization Examples</div>
+        <div class="code-block" style="font-size:12px">
+<span class="string">%3Cscript%3E</span>  → URL decode  → <span class="keyword">&lt;script&gt;</span> → L3 ✗<br>
+<span class="string">&amp;lt;script&amp;gt;</span> → HTML decode → <span class="keyword">&lt;script&gt;</span> → L3 ✗<br>
+<span class="string">%253Cscript</span>   → Double dec  → <span class="keyword">&lt;script&gt;</span> → L3 ✗<br>
+<span class="string">admin%00--</span>    → Null strip  → <span class="keyword">admin--</span>   → L4 AI
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== PART 2: Sections 5-8 ===== -->
+<!-- Paste this after Section 4 in part1.html, before </main> -->
+
+<!-- ===== SECTION 5: KẾT QUẢ THỰC NGHIỆM ===== -->
+<section class="section" id="s5">
+  <div class="section-label"><span class="num">05</span> THỰC NGHIỆM</div>
+  <h2>Red Team vs Blue Team</h2>
+  <p class="section-desc">Kết quả đối đầu khi Scanner (M1) và Hacker Brain (M3) tấn công trực tiếp vào WAF (M2).</p>
+
+  <!-- Key Metrics -->
+  <div class="grid-4" style="margin-bottom:24px">
+    <div class="stat-box">
+      <div class="stat-value red" data-count="132">0</div>
+      <div class="stat-label">Lỗ hổng (không WAF)</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value green" data-count="0">0</div>
+      <div class="stat-label">Lỗ hổng (có WAF)</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value red" data-count="18" data-suffix="/100">0</div>
+      <div class="stat-label">Safety Score (trước)</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value green" data-count="91" data-suffix="/100">0</div>
+      <div class="stat-label">Safety Score (sau)</div>
+    </div>
+  </div>
+
+  <!-- Scanner vs Backend -->
+  <div class="grid-2">
+    <div class="card mod1">
+      <div class="card-title"><span class="icon">⚔️</span> Bài kiểm tra 1: Scanner vs Backend (không WAF)</div>
+      <table class="data-table">
+        <thead><tr><th>Metric</th><th>Giá trị</th></tr></thead>
+        <tbody>
+          <tr><td>Endpoints quét</td><td><strong>11</strong></td></tr>
+          <tr><td>Payloads gửi</td><td><strong>1,333</strong></td></tr>
+          <tr><td>Lỗ hổng phát hiện</td><td><strong style="color:var(--accent-red)">132</strong></td></tr>
+          <tr><td>Thời gian quét</td><td>1,572s (~26 phút)</td></tr>
+          <tr><td>Điểm an toàn</td><td><strong style="color:var(--accent-red)">18/100</strong></td></tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top:16px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px">Phân bổ lỗ hổng theo loại</div>
+        <div class="bar-chart">
+          <div class="bar-row"><span class="bar-label">XSS</span><div class="bar-track"><div class="bar-fill red" data-width="90%"></div></div><span class="bar-val">120+</span></div>
+          <div class="bar-row"><span class="bar-label">SQLi</span><div class="bar-track"><div class="bar-fill orange" data-width="6%"></div></div><span class="bar-val">8</span></div>
+          <div class="bar-row"><span class="bar-label">SSTI</span><div class="bar-track"><div class="bar-fill yellow" data-width="3%"></div></div><span class="bar-val">Detected</span></div>
+          <div class="bar-row"><span class="bar-label">NoSQLi</span><div class="bar-track"><div class="bar-fill purple" data-width="2%"></div></div><span class="bar-val">Detected</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mod2">
+      <div class="card-title"><span class="icon">🛡️</span> Bài kiểm tra 2: Scanner vs WAF (có bảo vệ)</div>
+      <table class="data-table">
+        <thead><tr><th>Metric</th><th>Không WAF</th><th>Có WAF</th></tr></thead>
+        <tbody>
+          <tr><td>Tấn công thành công</td><td style="color:var(--accent-red)">132</td><td><strong style="color:var(--accent-green)">0</strong></td></tr>
+          <tr><td>Rate Limit triggered</td><td>—</td><td>&lt; 30 giây</td></tr>
+          <tr><td>IP bị Blacklist</td><td>—</td><td>✓ Auto</td></tr>
+          <tr><td>HTTP Response</td><td>200 OK</td><td><span class="severity critical">403 / 429</span></td></tr>
+          <tr><td>Điểm an toàn</td><td style="color:var(--accent-red)">18/100</td><td><strong style="color:var(--accent-green)">91/100</strong></td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:16px;padding:12px;background:var(--accent-green-dim);border-radius:var(--radius-sm);font-size:13px">
+        <strong style="color:var(--accent-green)">✓ WAF chặn 100% payload</strong> — Rate Limiter kích hoạt sau &lt;30s, IP bị auto-blacklist.
+      </div>
+    </div>
+  </div>
+
+  <!-- M3 Results -->
+  <div class="card mod3" style="margin-top:20px">
+    <div class="card-title"><span class="icon">🧠</span> Bài kiểm tra 3: AI Hacker Brain (M3) — Black-box Attack</div>
+    <div class="grid-2">
+      <div>
+        <table class="data-table">
+          <thead><tr><th>Metric</th><th>Giá trị</th></tr></thead>
+          <tbody>
+            <tr><td>Payloads gửi</td><td>24</td></tr>
+            <tr><td>Lỗ hổng trên backend trực tiếp</td><td><strong style="color:var(--accent-red)">4</strong></td></tr>
+            <tr><td>WAF block rate</td><td><strong style="color:var(--accent-green)">97.8%</strong></td></tr>
+            <tr><td>Thời gian quét</td><td>21s</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px">Lỗ hổng M3 phát hiện (bypass WAF: 0)</div>
+        <div class="bar-chart">
+          <div class="bar-row"><span class="bar-label" style="min-width:100px">CMDi</span><div class="bar-track"><div class="bar-fill red" data-width="100%"></div></div><span class="bar-val"><span class="severity critical">CRITICAL</span></span></div>
+          <div class="bar-row"><span class="bar-label" style="min-width:100px">IDOR</span><div class="bar-track"><div class="bar-fill orange" data-width="80%"></div></div><span class="bar-val"><span class="severity high">HIGH</span></span></div>
+          <div class="bar-row"><span class="bar-label" style="min-width:100px">PathTraversal</span><div class="bar-track"><div class="bar-fill orange" data-width="80%"></div></div><span class="bar-val"><span class="severity high">HIGH</span></span></div>
+          <div class="bar-row"><span class="bar-label" style="min-width:100px">XSS</span><div class="bar-track"><div class="bar-fill orange" data-width="80%"></div></div><span class="bar-val"><span class="severity high">HIGH</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Comparison Matrix: M1 vs M3 -->
+  <div class="card" style="margin-top:20px">
+    <div class="card-title">Ma trận So sánh: M1 (Scanner) vs M3 (Hacker Brain)</div>
+    <table class="matrix-table">
+      <thead>
+        <tr><th>Loại tấn công</th><th>M1 Phát hiện</th><th>M3 Phát hiện</th><th>WAF Chặn</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>SQLi</td><td class="check">✓ 100%</td><td class="cross">—</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+        <tr><td>XSS</td><td class="check">✓ 100%</td><td class="check">✓ HIGH</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+        <tr><td>CMDi</td><td class="cross">—</td><td class="check">✓ CRITICAL</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+        <tr><td>SSTI</td><td class="check">✓ 98.3%</td><td class="cross">—</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+        <tr><td>NoSQLi</td><td class="check">✓ 99.9%</td><td class="cross">—</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+        <tr><td>PathTraversal</td><td class="cross">—</td><td class="check">✓ HIGH</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+        <tr><td>IDOR</td><td class="cross">—</td><td class="check">✓ HIGH</td><td><span class="block-badge">✓ BLOCKED</span></td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:12px;font-size:13px;color:var(--text-muted)">
+      <strong>Nhận xét:</strong> M1 mạnh về phát hiện injection cổ điển (SQLi, XSS, SSTI). M3 vượt trội ở logic vuln (IDOR, CMDi, PathTraversal) nhờ LLM sinh payload theo ngữ cảnh. <strong>WAF chặn 100%</strong> khi được bật.
+    </div>
+  </div>
+</section>
+
+<!-- ===== SECTION 6: PAYLOAD FLOW DEMO ===== -->
+<section class="section" id="s6">
+  <div class="section-label"><span class="num">06</span> TRỰC QUAN HÓA</div>
+  <h2>Demo: Luồng xử lý Payload qua WAF</h2>
+  <p class="section-desc">Nhấn "Bắn Payload" để xem từng lớp phòng thủ xử lý payload tấn công theo thời gian thực.</p>
+
+  <div class="flow-container">
+    <div class="demo-controls">
+      <button class="btn btn-red" id="btn-fire-payload">🚀 Bắn Payload</button>
+      <span id="flow-payload-text" style="font-family:var(--font-mono);font-size:12px;color:var(--accent-orange);padding:8px 12px;background:var(--bg-accent);border-radius:6px">Click để bắt đầu...</span>
+    </div>
+    <div class="flow-track">
+      <div class="flow-node" id="flow-input" style="border:2px solid var(--border)">
+        <div style="font-size:14px">📥</div>
+        <div>HTTP Request</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node" id="flow-l1" style="border:2px solid var(--border)">
+        <div style="font-size:14px">🚫</div>
+        <div>L1: Blacklist</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node" id="flow-l2" style="border:2px solid var(--border)">
+        <div style="font-size:14px">⏱️</div>
+        <div>L2: Rate Limit</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node" id="flow-l25" style="border:2px solid var(--border)">
+        <div style="font-size:14px">🔓</div>
+        <div>L2.5: Decode</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node" id="flow-l3" style="border:2px solid var(--border)">
+        <div style="font-size:14px">📏</div>
+        <div>L3: Regex</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node" id="flow-l4" style="border:2px solid var(--border)">
+        <div style="font-size:14px">🧠</div>
+        <div>L4: AI</div>
+      </div>
+    </div>
+    <div id="flow-status" style="margin-top:16px;font-size:14px;font-weight:500;min-height:24px;color:var(--text-muted)">Nhấn "Bắn Payload" để bắt đầu demo</div>
+  </div>
+</section>
+
+<!-- ===== SECTION 7: MUTATION ENGINE DEMO ===== -->
+<section class="section" id="s7">
+  <div class="section-label"><span class="num">07</span> ADVERSARIAL</div>
+  <h2>Demo: Mutation Engine</h2>
+  <p class="section-desc">Chọn chiến lược mutation để xem payload biến đổi và AI confidence thay đổi.</p>
+
+  <div class="card">
+    <div class="demo-controls">
+      <button class="mutation-btn btn active" data-mutation="original">Original</button>
+      <button class="mutation-btn btn" data-mutation="html_entity">HTML Entity</button>
+      <button class="mutation-btn btn" data-mutation="url_encode">URL Encode</button>
+      <button class="mutation-btn btn" data-mutation="case_swap">Case Swap</button>
+      <button class="mutation-btn btn" data-mutation="whitespace">Whitespace</button>
+    </div>
+    <div id="mutation-output">
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Payload gốc</div>
+        <div class="code-block">&lt;script&gt;alert('XSS')&lt;/script&gt;</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+        <span style="font-size:13px;color:var(--text-muted)">AI Confidence:</span>
+        <div style="flex:1;height:8px;background:var(--bg-accent);border-radius:4px;overflow:hidden">
+          <div style="width:100%;height:100%;background:var(--accent-red);border-radius:4px"></div>
+        </div>
+        <span style="font-family:var(--font-mono);font-weight:700;color:var(--accent-red)">100%</span>
+      </div>
+      <div style="font-size:13px;color:var(--accent-red);font-weight:600">→ BLOCKED (L3 Regex + AI 100%)</div>
+    </div>
+
+    <div style="margin-top:24px">
+      <div class="card-title">Hiệu quả các chiến lược Mutation</div>
+      <table class="data-table">
+        <thead><tr><th>Chiến lược</th><th>Giảm Confidence</th><th>Bypass AI?</th><th>Bypass WAF?</th></tr></thead>
+        <tbody>
+          <tr><td>html_entity</td><td>-34.5%</td><td class="cross">❌ vẫn &gt;50%</td><td class="cross">❌ L3 Regex chặn</td></tr>
+          <tr><td>url_encode</td><td>-15.2%</td><td class="cross">❌</td><td class="cross">❌ Canonicalize</td></tr>
+          <tr><td>case_swap</td><td>-8.7%</td><td class="cross">❌</td><td class="cross">❌</td></tr>
+          <tr><td>sql_comment</td><td>-12.3%</td><td class="cross">❌</td><td class="cross">❌</td></tr>
+          <tr><td>whitespace</td><td>-5.1%</td><td class="cross">❌</td><td class="cross">❌</td></tr>
+          <tr><td>concat_split</td><td>-3.8%</td><td class="cross">❌</td><td class="cross">❌</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SECTION 8: KẾT LUẬN ===== -->
+<section class="section" id="s8">
+  <div class="section-label"><span class="num">08</span> KẾT LUẬN</div>
+  <h2>Kết luận & Hướng phát triển</h2>
+
+  <div class="card">
+    <div class="card-title">Đóng góp chính</div>
+    <div class="grid-2">
+      <div>
+        <div class="timeline">
+          <div class="timeline-item">
+            <strong>Bi-LSTM 97.43% accuracy</strong>
+            <p style="font-size:13px;color:var(--text-secondary)">Phân loại 13 nhãn tấn công web trên test set độc lập 9,847 mẫu.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>Defense-in-Depth 5 tầng</strong>
+            <p style="font-size:13px;color:var(--text-secondary)">Chặn 100% payload, nâng Safety Score từ 18 → 91/100.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>Greedy Hill Climbing</strong>
+            <p style="font-size:13px;color:var(--text-secondary)">Đánh giá worst-case robustness của AI model. Bypass rate = 0%.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>Continual Learning</strong>
+            <p style="font-size:13px;color:var(--text-secondary)">WAF tự tiến hóa từ False Positive mà không mất kiến thức cũ.</p>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:14px;font-weight:700;margin-bottom:16px">Hướng phát triển tương lai</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="padding:14px;background:var(--bg-accent);border-radius:var(--radius-sm);border-left:3px solid var(--accent-orange)">
+            <div style="font-weight:600;font-size:14px">🐳 Kiến trúc Microservices</div>
+            <div style="font-size:13px;color:var(--text-secondary)">Docker Container cho từng Module, scale ngang trên cloud.</div>
+          </div>
+          <div style="padding:14px;background:var(--bg-accent);border-radius:var(--radius-sm);border-left:3px solid var(--accent-purple)">
+            <div style="font-weight:600;font-size:14px">📊 Threat Intelligence LLM</div>
+            <div style="font-size:13px;color:var(--text-secondary)">LLM đọc WAF log → tự động viết báo cáo tình báo hiểm họa.</div>
+          </div>
+          <div style="padding:14px;background:var(--bg-accent);border-radius:var(--radius-sm);border-left:3px solid var(--accent-blue)">
+            <div style="font-weight:600;font-size:14px">🤖 Multi-LLM Support</div>
+            <div style="font-size:13px;color:var(--text-secondary)">OpenAI, Anthropic, Ollama — đa dạng hóa chiến lược tấn công.</div>
+          </div>
+          <div style="padding:14px;background:var(--bg-accent);border-radius:var(--radius-sm);border-left:3px solid var(--accent-green)">
+            <div style="font-weight:600;font-size:14px">🎯 Reinforcement Learning</div>
+            <div style="font-size:13px;color:var(--text-secondary)">Tác nhân RL tự tìm chiến thuật tấn công mới.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer class="report-footer" style="margin-top:40px">
+  <div class="authors">Đinh Trường An & Phạm Hoàng Anh</div>
+  <div>Đại học Khoa học Tự nhiên — ĐHQG Hà Nội | Tháng 04/2026</div>
+  <div style="margin-top:8px;font-size:12px">GVHD: TS. Nguyễn Thị Bích Thủy — Khoa Toán – Cơ – Tin học</div>
+</footer>
+
+</main>
+<script src="report.js"></script>
+</body>
+</html>

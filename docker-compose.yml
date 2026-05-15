@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  demo-vulnerable:
+    build: .
+    command: python webtest.py --no-waf --port 5170
+    networks:
+      - internal
+    # Not exposing port to host, so attacker MUST go through protected or scanner network
+
+  demo-protected:
+    build: .
+    command: python webtest.py --port 5000
+    ports:
+      - "5000:5000"
+    networks:
+      - external
+
+networks:
+  internal:
+    internal: true
+  external:
